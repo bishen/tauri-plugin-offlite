@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-db-delete"
+description = "Enables the db_delete command without any pre-configured scope."
+commands.allow = ["db_delete"]
+
+[[permission]]
+identifier = "deny-db-delete"
+description = "Denies the db_delete command without any pre-configured scope."
+commands.deny = ["db_delete"]

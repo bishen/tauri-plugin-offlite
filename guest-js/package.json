@@ -1,0 +1,25 @@
+{
+  "name": "tauri-plugin-offlite-api",
+  "version": "0.1.0",
+  "description": "JavaScript bindings for tauri-plugin-offlite",
+  "main": "src/index.js",
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "keywords": [
+    "tauri",
+    "plugin",
+    "sqlite",
+    "offline",
+    "sync"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "BiShen",
+    "email": "bishen@live.com",
+    "url": "https://www.suanjinshan.com/"
+  }
+}

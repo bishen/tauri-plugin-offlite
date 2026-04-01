@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-db-execute"
+description = "Enables the db_execute command without any pre-configured scope."
+commands.allow = ["db_execute"]
+
+[[permission]]
+identifier = "deny-db-execute"
+description = "Denies the db_execute command without any pre-configured scope."
+commands.deny = ["db_execute"]

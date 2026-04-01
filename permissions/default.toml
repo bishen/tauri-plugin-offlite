@@ -1,0 +1,13 @@
+[default]
+description = "Default permissions for offlite plugin - allows all database and sync operations"
+permissions = [
+    "allow-db-open",
+    "allow-db-close",
+    "allow-db-execute",
+    "allow-db-query",
+    "allow-db-batch",
+    "allow-db-delete",
+    "allow-sync-start",
+    "allow-sync-stop",
+    "allow-sync-status",
+]
