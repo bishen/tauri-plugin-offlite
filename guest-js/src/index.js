@@ -107,3 +107,8 @@ export async function syncStop(projectId) {
 export async function syncStatus(projectId) {
   return invoke('plugin:offlite|sync_status', { projectId })
 }
+
+
+// ==================== Sync Engine (JS SDK) ====================
+
+export { createSyncEngine } from './sync.js'

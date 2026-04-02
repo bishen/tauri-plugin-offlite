@@ -152,6 +152,25 @@ _change_log (id, table_name, doc_id, operation, data, timestamp, synced, sync_er
 └── cache.redb
 ```
 
+## 同步引擎
+
+同步逻辑在 `guest-js/src/sync.js` 中实现（JS SDK 层），不在 Rust 侧。
+与 WatermelonDB、PowerSync 等主流方案一致：Rust 只管存储，JS 管同步。
+
+```javascript
+import { createSyncEngine } from 'tauri-plugin-offlite-api'
+
+const engine = createSyncEngine({
+  baseUrl: 'https://api.example.com',
+  token: 'jwt_token',
+  appName: 'survey',
+})
+
+engine.start('project_001', ['planning', 'sample'])
+engine.pushChanges('planning')  // write-through 即时推送
+engine.stop()
+```
+
 ## 开发
 
 ```bash
