@@ -319,6 +319,18 @@
           "markdownDescription": "Denies the db_close command without any pre-configured scope."
         },
         {
+          "description": "Enables the db_create_tables command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-db-create-tables",
+          "markdownDescription": "Enables the db_create_tables command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the db_create_tables command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-db-create-tables",
+          "markdownDescription": "Denies the db_create_tables command without any pre-configured scope."
+        },
+        {
           "description": "Enables the db_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-db-delete",
@@ -403,10 +415,10 @@
           "markdownDescription": "Denies the sync_stop command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for offlite plugin - allows all database and sync operations\n#### This default permission set includes:\n\n- `allow-db-open`\n- `allow-db-close`\n- `allow-db-execute`\n- `allow-db-query`\n- `allow-db-batch`\n- `allow-db-delete`\n- `allow-sync-start`\n- `allow-sync-stop`\n- `allow-sync-status`",
+          "description": "Default permissions for offlite plugin - allows all database and sync operations\n#### This default permission set includes:\n\n- `allow-db-open`\n- `allow-db-close`\n- `allow-db-execute`\n- `allow-db-query`\n- `allow-db-batch`\n- `allow-db-delete`\n- `allow-db-create-tables`\n- `allow-sync-start`\n- `allow-sync-stop`\n- `allow-sync-status`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for offlite plugin - allows all database and sync operations\n#### This default permission set includes:\n\n- `allow-db-open`\n- `allow-db-close`\n- `allow-db-execute`\n- `allow-db-query`\n- `allow-db-batch`\n- `allow-db-delete`\n- `allow-sync-start`\n- `allow-sync-stop`\n- `allow-sync-status`"
+          "markdownDescription": "Default permissions for offlite plugin - allows all database and sync operations\n#### This default permission set includes:\n\n- `allow-db-open`\n- `allow-db-close`\n- `allow-db-execute`\n- `allow-db-query`\n- `allow-db-batch`\n- `allow-db-delete`\n- `allow-db-create-tables`\n- `allow-sync-start`\n- `allow-sync-stop`\n- `allow-sync-status`"
         }
       ]
     }

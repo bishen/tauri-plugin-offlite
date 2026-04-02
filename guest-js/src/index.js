@@ -66,6 +66,20 @@ export async function dbDelete(projectId) {
   return invoke('plugin:offlite|db_delete', { projectId })
 }
 
+// ==================== Schema ====================
+
+/**
+ * Create business tables from schema definitions.
+ * Each schema creates a table with fixed metadata columns, standard indexes,
+ * the shared _change_log table, and any extra json_extract indexes.
+ *
+ * @param {string} projectId
+ * @param {Array<{name: string, json_indexes?: Array<{name: string, json_path: string}>}>} schemas
+ */
+export async function dbCreateTables(projectId, schemas) {
+  return invoke('plugin:offlite|db_create_tables', { projectId, schemas })
+}
+
 // ==================== Sync Engine ====================
 
 /**

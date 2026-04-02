@@ -10,6 +10,7 @@ Default permissions for offlite plugin - allows all database and sync operations
 - `allow-db-query`
 - `allow-db-batch`
 - `allow-db-delete`
+- `allow-db-create-tables`
 - `allow-sync-start`
 - `allow-sync-stop`
 - `allow-sync-status`
@@ -71,6 +72,32 @@ Enables the db_close command without any pre-configured scope.
 <td>
 
 Denies the db_close command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`offlite:allow-db-create-tables`
+
+</td>
+<td>
+
+Enables the db_create_tables command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`offlite:deny-db-create-tables`
+
+</td>
+<td>
+
+Denies the db_create_tables command without any pre-configured scope.
 
 </td>
 </tr>

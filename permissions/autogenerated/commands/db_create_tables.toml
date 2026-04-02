@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-db-create-tables"
+description = "Enables the db_create_tables command without any pre-configured scope."
+commands.allow = ["db_create_tables"]
+
+[[permission]]
+identifier = "deny-db-create-tables"
+description = "Denies the db_create_tables command without any pre-configured scope."
+commands.deny = ["db_create_tables"]

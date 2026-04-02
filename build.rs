@@ -5,6 +5,7 @@ const COMMANDS: &[&str] = &[
     "db_query",
     "db_batch",
     "db_delete",
+    "db_create_tables",
     "sync_start",
     "sync_stop",
     "sync_status",
