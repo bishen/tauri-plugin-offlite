@@ -89,6 +89,7 @@ import {
   base_url: "https://api.example.com",
   token: "jwt_token",
   sync_mode: "project",       // "user" | "company" | "project"
+  app_name: "survey",         // 应用名前缀（服务端表名: survey_{table}）
   tables: [{ name: "planning" }],
   realtime: true,              // 启用 SSE 实时同步
   poll_interval: 30,           // 轮询间隔（秒）
