@@ -2,15 +2,21 @@
 
 ## 主流方案对比分析
 
-| 特性 | WatermelonDB | RxDB | PowerSync | Supabase Realtime |
-|------|-------------|------|-----------|-------------------|
-| 同步触发 | 手动调用 `synchronize()` | 自动（RxJS Observable） | 自动（后台流） | 自动（WebSocket） |
-| 推送方式 | 批量 push（整库变更集） | 逐文档 push + checkpoint | 写入即推（CRUD proxy） | 直接写服务端 |
-| 拉取方式 | 批量 pull（since timestamp） | pull handler + stream | SSE/WebSocket 流 | WebSocket CDC |
-| 变更追踪 | 内置 `_status` 列（created/updated/deleted） | RxDB 内部 checkpoint | 服务端 oplog | PostgreSQL WAL |
-| 冲突解决 | 服务端决定（push 时） | 自定义 conflict handler | 服务端 LWW | 服务端 LWW |
-| 离线支持 | 本地写 → 上线后 push | 本地写 → 上线后 push | 本地写 → 上线后 push | 无离线支持 |
-| 数据完整性 | pull-then-push 顺序保证 | checkpoint 保证 | oplog 序列号保证 | WAL 序列号保证 |
+| 特性 | WatermelonDB | RxDB | PowerSync | Supabase Realtime | **Offlite** |
+|------|-------------|------|-----------|-------------------|-------------|
+| 同步触发 | 手动 `synchronize()` | 自动（RxJS） | 自动（后台流） | 自动（WebSocket） | **手动 + 自动混合** |
+| 推送方式 | 批量 push（整库变更集） | 逐文档 push + checkpoint | 写入即推（CRUD proxy） | 直接写服务端 | **write-through + 批量兜底** |
+| 拉取方式 | 批量 pull（since timestamp） | pull handler + stream | SSE/WebSocket 流 | WebSocket CDC | **SSE 实时 + pull-then-push 兜底** |
+| 变更追踪 | `_status` 列 | RxDB 内部 checkpoint | 服务端 oplog | PostgreSQL WAL | **`_status` 列（学习 WatermelonDB）** |
+| 冲突解决 | 服务端决定 | 自定义 handler | 服务端 LWW | 服务端 LWW | **服务端 LWW + 自动回写本地** |
+| 离线支持 | ✅ 本地写 → 上线 push | ✅ 本地写 → 上线 push | ✅ 本地写 → 上线 push | ❌ 无离线 | **✅ 本地优先，_status 保留** |
+| 数据完整性 | pull-then-push 顺序 | checkpoint 保证 | oplog 序列号 | WAL 序列号 | **pull-then-push + 不覆盖未推送** |
+| 存储引擎 | SQLite（React Native） | IndexedDB / SQLite | SQLite | PostgreSQL | **SQLite WAL（Tauri Rust 插件）** |
+| 通信协议 | JSON | JSON / GraphQL | HTTP + SSE | WebSocket | **MessagePack（体积小 30-50%）** |
+| 平台 | React Native | 浏览器 / Node | React Native / Flutter / Web | Web | **Tauri（桌面 + Android）** |
+| 服务端要求 | 自建 REST API | 自建 / CouchDB / Supabase | PowerSync Cloud / 自建 | Supabase Cloud | **自建 Fastify + PostgreSQL** |
+| 多应用隔离 | ❌ 单应用 | ❌ 单应用 | ✅ Bucket 机制 | ❌ 单项目 | **✅ appName 前缀动态建表** |
+| 每次写 IPC 开销 | 1 次（_status 列） | 1 次 | 0 次（proxy） | 0 次（直连） | **1 次（_status 列，无 changelog）** |
 
 ## 核心洞察
 
