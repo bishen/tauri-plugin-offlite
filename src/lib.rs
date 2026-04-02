@@ -24,11 +24,14 @@ use tauri::{
     Manager, Runtime,
 };
 
+pub mod changelog;
 pub mod database;
 pub mod schema;
+pub mod sync;
 
 use database::DatabaseManager;
 use schema::TableSchema;
+use sync::engine::{SyncEngineConfig, SyncEngineManager};
 
 /// Initialize the offlite plugin.
 ///
@@ -86,6 +89,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
             // Store as managed state so commands can access it
             app.manage(db_manager);
+
+            // Create and manage the SyncEngineManager
+            app.manage(SyncEngineManager::new());
 
             Ok(())
         })
@@ -250,32 +256,37 @@ fn db_create_tables(
 }
 
 #[tauri::command]
-fn sync_start(
+fn sync_start<R: Runtime>(
+    sync_manager: tauri::State<'_, SyncEngineManager>,
+    app_handle: tauri::AppHandle<R>,
     project_id: String,
     config: serde_json::Value,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     log::info!("sync_start: {} config={}", project_id, config);
-    Ok(())
+    let engine_config: SyncEngineConfig =
+        serde_json::from_value(config).map_err(|e| format!("Invalid sync config: {}", e))?;
+    let state = sync_manager.start(&project_id, engine_config, &app_handle)?;
+    serde_json::to_value(&state).map_err(|e| format!("Failed to serialize sync state: {}", e))
 }
 
 #[tauri::command]
-fn sync_stop(project_id: String) -> Result<(), String> {
+fn sync_stop<R: Runtime>(
+    sync_manager: tauri::State<'_, SyncEngineManager>,
+    app_handle: tauri::AppHandle<R>,
+    project_id: String,
+) -> Result<(), String> {
     log::info!("sync_stop: {}", project_id);
-    Ok(())
+    sync_manager.stop(&project_id, &app_handle)
 }
 
 #[tauri::command]
-fn sync_status(project_id: String) -> Result<serde_json::Value, String> {
+fn sync_status(
+    sync_manager: tauri::State<'_, SyncEngineManager>,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
     log::info!("sync_status: {}", project_id);
-    Ok(serde_json::json!({
-        "active": false,
-        "paused": false,
-        "error": null,
-        "docs_read": 0,
-        "docs_written": 0,
-        "mode": "offline",
-        "sse_connected": false
-    }))
+    let state = sync_manager.status(&project_id)?;
+    serde_json::to_value(&state).map_err(|e| format!("Failed to serialize sync state: {}", e))
 }
 
 // ---------------------------------------------------------------------------
