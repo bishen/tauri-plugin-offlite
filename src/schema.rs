@@ -39,6 +39,7 @@ pub fn create_table(conn: &Connection, schema: &TableSchema) -> Result<(), Strin
             updatedAt   TEXT NOT NULL,
             _deleted    INTEGER DEFAULT 0,
             _version    INTEGER DEFAULT 1,
+            _status     TEXT DEFAULT 'synced',
             data        TEXT NOT NULL
         )",
         table = schema.name,
@@ -53,6 +54,7 @@ pub fn create_table(conn: &Connection, schema: &TableSchema) -> Result<(), Strin
         ("p_id", "p_id"),
         ("updatedAt", "updatedAt"),
         ("deleted", "_deleted"),
+        ("status", "_status"),
     ];
     for (suffix, column) in &standard_indexes {
         let sql = format!(
