@@ -306,7 +306,8 @@ export function createSyncEngine(config) {
       return { op: 'upsert', doc_id: doc._id, data, updatedAt: doc.updatedAt }
     })
 
-    const body = encode({ changes, syncMode })
+    const encoded = encode({ changes, syncMode })
+    const body = new Blob([encoded], { type: 'application/sjs' })
     const pushUrl = `${baseUrl}/offlite/sync/${table}/push`
     const resp = await fetchWithAuth(pushUrl, { method: 'POST', headers: buildHeaders(), body })
     if (!resp.ok) throw new Error(`Push ${table}: ${resp.status}`)
