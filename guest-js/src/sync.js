@@ -7,27 +7,53 @@
  * 1. 本地优先：所有写操作先写 SQLite，再异步推送
  * 2. pull-then-push：先拉后推，避免覆盖服务端新数据
  * 3. _status 列追踪变更：synced/created/updated/deleted，无需 changelog 表
- * 4. SSE 实时 + 定时 sync 兜底：三级降级
+ * 4. SSE 实时 + 定时 sync 兜底：三级降级（realtime → polling → offline）
  * 5. 数据不丢失：推送失败保留 _status，下次重试
+ * 6. Token 刷新：401 自动刷新 + 重试
+ * 7. Android 兼容：EventSource 检测 + 降级策略
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { encode, decode } from '@msgpack/msgpack'
 
 // ============ 常量 ============
 
 const MAX_SSE_FAILURES = 3
 const DEFAULT_SYNC_INTERVAL = 30000
+const ANDROID_SYNC_INTERVAL = 15000
 const BACKOFF_INITIAL = 1000
 const BACKOFF_MAX = 60000
 const BACKOFF_FACTOR = 2
 const PUSH_BATCH_SIZE = 50
 const PULL_PAGE_SIZE = 100
 
+// ============ 平台检测 ============
+
+/** 检测是否为 Android WebView 环境 */
+function isAndroid() {
+  return typeof navigator !== 'undefined' &&
+    /Android/i.test(navigator.userAgent)
+}
+
+/** 检测 EventSource 是否可用 */
+function hasEventSource() {
+  return typeof EventSource !== 'undefined'
+}
+
 // ============ 同步引擎 ============
 
 /**
  * 创建同步引擎实例
+ *
+ * @param {Object} config
+ * @param {string} config.baseUrl - 服务端 API 地址
+ * @param {string} config.token - JWT Token
+ * @param {string} config.appName - 应用名前缀（默认 'default'）
+ * @param {string} config.syncMode - 同步模式 'user'|'company'|'project'
+ * @param {number} config.syncInterval - 轮询间隔毫秒（默认 30000）
+ * @param {Function} config.onTokenRefresh - Token 刷新回调，返回 Promise<string>
+ * @returns {SyncEngine}
  */
 export function createSyncEngine(config) {
   const {
@@ -35,6 +61,7 @@ export function createSyncEngine(config) {
     appName = 'default',
     syncMode = 'project',
     syncInterval = DEFAULT_SYNC_INTERVAL,
+    onTokenRefresh = null,
   } = config
 
   let token = config.token || ''
@@ -44,9 +71,16 @@ export function createSyncEngine(config) {
   let syncTimer = null
   let sseFailCount = 0
   let retryAttempt = 0
+  let sseRetryTimer = null
   let stopped = true
   let syncing = false
+  let checkpointTableReady = false
   const listeners = new Set()
+
+  // 事件监听器清理函数
+  let onlineHandler = null
+  let offlineHandler = null
+  let unlistenResumed = null
 
   const state = {
     active: false,
@@ -71,9 +105,40 @@ export function createSyncEngine(config) {
 
   function updateToken(t) { token = t }
 
+  // ============ Task 3.3: fetchWithAuth - Token 刷新与 401 重试 ============
+
+  /**
+   * 带认证的 fetch 封装
+   * 拦截 401 响应，调用 onTokenRefresh 获取新 token 后重试一次
+   * Token 刷新失败时降级为 offline
+   */
+  async function fetchWithAuth(url, options = {}) {
+    const resp = await fetch(url, options)
+
+    if (resp.status === 401 && onTokenRefresh) {
+      try {
+        const newToken = await onTokenRefresh()
+        if (newToken) {
+          token = newToken
+          // 用新 token 重试请求
+          const retryHeaders = { ...options.headers, Authorization: `Bearer ${token}` }
+          return await fetch(url, { ...options, headers: retryHeaders })
+        }
+      } catch (err) {
+        console.error('[Sync] Token refresh failed:', err.message)
+        // Token 刷新失败 → 降级为 offline
+        setState({ mode: 'offline', error: 'Token refresh failed' })
+        closeSse()
+        stopSyncTimer()
+      }
+    }
+
+    return resp
+  }
+
   // ============ 本地数据操作 ============
 
-  /** 获取某表所有未同步的记录 */
+  /** 获取某表所有未同步的记录（限 PUSH_BATCH_SIZE 条） */
   async function getUnsyncedDocs(table) {
     return await invoke('plugin:offlite|db_query', {
       projectId,
@@ -107,7 +172,6 @@ export function createSyncEngine(config) {
         })
       } else {
         const dataJson = typeof c.data === 'string' ? c.data : JSON.stringify(c.data || {})
-        // INSERT OR REPLACE，但不覆盖本地未推送的修改
         // 先检查本地是否有未推送的版本
         const local = await invoke('plugin:offlite|db_query', {
           projectId,
@@ -138,9 +202,40 @@ export function createSyncEngine(config) {
     }
   }
 
+  // ============ Task 3.1: Checkpoint 表自动创建 ============
+
+  /**
+   * 确保 _sync_checkpoint 表存在（首次调用时自动创建）
+   */
+  async function ensureCheckpointTable() {
+    if (checkpointTableReady) return
+    try {
+      await invoke('plugin:offlite|db_execute', {
+        projectId: 'global',
+        sql: `CREATE TABLE IF NOT EXISTS _sync_checkpoint (
+          table_name  TEXT NOT NULL,
+          sync_mode   TEXT NOT NULL,
+          filter_key  TEXT NOT NULL,
+          last_sync_at TEXT NOT NULL,
+          PRIMARY KEY (table_name, sync_mode, filter_key)
+        )`,
+        params: [],
+      })
+      checkpointTableReady = true
+    } catch (err) {
+      // 表可能已存在，标记为就绪
+      if (String(err).includes('already exists') || String(err).includes('table')) {
+        checkpointTableReady = true
+      } else {
+        console.error('[Sync] Failed to create checkpoint table:', err)
+      }
+    }
+  }
+
   /** 读取 checkpoint */
   async function getCheckpoint(table) {
     try {
+      await ensureCheckpointTable()
       const rows = await invoke('plugin:offlite|db_query', {
         projectId: 'global',
         sql: `SELECT last_sync_at FROM _sync_checkpoint
@@ -153,6 +248,7 @@ export function createSyncEngine(config) {
 
   /** 更新 checkpoint */
   async function setCheckpoint(table, serverTime) {
+    await ensureCheckpointTable()
     await invoke('plugin:offlite|db_execute', {
       projectId: 'global',
       sql: `INSERT OR REPLACE INTO _sync_checkpoint (table_name, sync_mode, filter_key, last_sync_at)
@@ -163,7 +259,7 @@ export function createSyncEngine(config) {
 
   // ============ 网络操作 ============
 
-  function headers() {
+  function buildHeaders() {
     return {
       'Content-Type': 'application/sjs',
       'Accept': 'application/sjs',
@@ -177,7 +273,7 @@ export function createSyncEngine(config) {
     const since = await getCheckpoint(table)
     const url = `${baseUrl}/offlite/sync/${table}/pull?since=${encodeURIComponent(since)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
 
-    const resp = await fetch(url, { headers: headers() })
+    const resp = await fetchWithAuth(url, { headers: buildHeaders() })
     if (!resp.ok) throw new Error(`Pull ${table}: ${resp.status}`)
 
     const bytes = new Uint8Array(await resp.arrayBuffer())
@@ -206,14 +302,13 @@ export function createSyncEngine(config) {
       }
       let data = {}
       try { data = typeof doc.data === 'string' ? JSON.parse(doc.data) : (doc.data || {}) } catch (_) {}
-      // 合并元数据到 data 中供服务端存储
       data.p_id = doc.p_id
       return { op: 'upsert', doc_id: doc._id, data, updatedAt: doc.updatedAt }
     })
 
     const body = encode({ changes, syncMode })
-    const url = `${baseUrl}/offlite/sync/${table}/push`
-    const resp = await fetch(url, { method: 'POST', headers: headers(), body })
+    const pushUrl = `${baseUrl}/offlite/sync/${table}/push`
+    const resp = await fetchWithAuth(pushUrl, { method: 'POST', headers: buildHeaders(), body })
     if (!resp.ok) throw new Error(`Push ${table}: ${resp.status}`)
 
     const bytes = new Uint8Array(await resp.arrayBuffer())
@@ -242,41 +337,55 @@ export function createSyncEngine(config) {
     return { pushed: syncedIds.length, conflicts: (result.conflicts || []).length }
   }
 
-  // ============ 核心同步流程（WatermelonDB 风格） ============
+  // ============ Task 3.5: synchronize() 互斥执行与错误恢复 ============
 
   /**
    * 执行一次完整同步：pull-then-push
-   * 先拉后推，保证不覆盖服务端新数据
+   * - syncing 标志防止并发执行
+   * - 每张表独立 try/catch，单表失败不影响其他表
+   * - 错误记录到 state.error
    */
   async function synchronize() {
     if (syncing || stopped) return
     syncing = true
     setState({ syncing: true })
 
+    const errors = []
+
     try {
       // 1. PULL：拉取所有表的服务端变更
       for (const table of tables) {
-        let hasMore = true
-        while (hasMore) {
-          const result = await pullTable(table)
-          hasMore = result.hasMore
+        try {
+          let hasMore = true
+          while (hasMore) {
+            const result = await pullTable(table)
+            hasMore = result.hasMore
+          }
+        } catch (err) {
+          console.error(`[Sync] Pull ${table} error:`, err.message)
+          errors.push(`Pull ${table}: ${err.message}`)
         }
       }
 
       // 2. PUSH：推送所有表的本地变更
       for (const table of tables) {
-        let hasMore = true
-        while (hasMore) {
-          const docs = await getUnsyncedDocs(table)
-          if (!docs.length) break
-          await pushTable(table)
-          hasMore = docs.length >= PUSH_BATCH_SIZE
+        try {
+          let hasMore = true
+          while (hasMore) {
+            const docs = await getUnsyncedDocs(table)
+            if (!docs.length) break
+            await pushTable(table)
+            hasMore = docs.length >= PUSH_BATCH_SIZE
+          }
+        } catch (err) {
+          console.error(`[Sync] Push ${table} error:`, err.message)
+          errors.push(`Push ${table}: ${err.message}`)
         }
       }
 
       setState({
         syncing: false,
-        error: null,
+        error: errors.length ? errors.join('; ') : null,
         last_synced_at: new Date().toISOString(),
       })
     } catch (err) {
@@ -300,21 +409,42 @@ export function createSyncEngine(config) {
     return false
   }
 
-  // ============ SSE 实时流（RxDB 风格） ============
+  // ============ Task 3.4: SSE 实时流 + Android 兼容性 ============
+
+  /** Android 环境下 SSE 最大失败次数（降级更快） */
+  const androidMaxSseFailures = 1
+
+  /** 获取当前环境的 SSE 最大失败次数 */
+  function getMaxSseFailures() {
+    return isAndroid() ? androidMaxSseFailures : MAX_SSE_FAILURES
+  }
+
+  /** 获取当前环境的轮询间隔 */
+  function getSyncInterval() {
+    return isAndroid() ? ANDROID_SYNC_INTERVAL : syncInterval
+  }
 
   function connectSSE() {
     if (stopped || sseSource) return
 
-    const url = `${baseUrl}/offlite/sync/sse?token=${encodeURIComponent(token)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
+    // Task 3.4: 检测 EventSource 是否可用
+    if (!hasEventSource()) {
+      console.warn('[Sync] EventSource not available, falling back to polling')
+      setState({ mode: 'polling', sse_connected: false })
+      startSyncTimer()
+      return
+    }
+
+    const sseUrl = `${baseUrl}/offlite/sync/sse?token=${encodeURIComponent(token)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
 
     try {
-      sseSource = new EventSource(url)
+      sseSource = new EventSource(sseUrl)
 
       sseSource.onopen = () => {
         sseFailCount = 0
         retryAttempt = 0
         setState({ mode: 'realtime', sse_connected: true, error: null })
-        // SSE 连接成功后停止定时同步（SSE 负责实时拉取）
+        // SSE 连接成功后停止定时同步
         stopSyncTimer()
       }
 
@@ -331,19 +461,25 @@ export function createSyncEngine(config) {
         }
       })
 
-      sseSource.addEventListener('heartbeat', () => {})
+      sseSource.addEventListener('heartbeat', () => {
+        // heartbeat 确认连接存活，无需额外操作
+      })
 
       sseSource.onerror = () => {
         sseFailCount++
         closeSse()
 
-        if (sseFailCount >= MAX_SSE_FAILURES) {
+        const maxFailures = getMaxSseFailures()
+
+        if (sseFailCount >= maxFailures) {
+          // 超过阈值，降级为轮询
           setState({ mode: 'polling', sse_connected: false })
           startSyncTimer()
         } else {
+          // 指数退避重连
           const delay = Math.min(BACKOFF_INITIAL * Math.pow(BACKOFF_FACTOR, retryAttempt), BACKOFF_MAX)
           retryAttempt++
-          setTimeout(() => connectSSE(), delay)
+          sseRetryTimer = setTimeout(() => connectSSE(), delay)
         }
       }
     } catch (_) {
@@ -362,20 +498,23 @@ export function createSyncEngine(config) {
   function startSyncTimer() {
     stopSyncTimer()
     if (stopped) return
-    syncTimer = setInterval(() => synchronize(), syncInterval)
+    const interval = getSyncInterval()
+    syncTimer = setInterval(() => synchronize(), interval)
   }
 
   function stopSyncTimer() {
     if (syncTimer) { clearInterval(syncTimer); syncTimer = null }
   }
 
-  // ============ Write-through 即时推送 ============
+  // ============ Task 3.6: pushChanges() offline 模式跳过 ============
 
   /**
-   * 写入后立即推送单表变更
-   * 由 db.js 的 add/update/remove 调用
+   * 写入后立即推送单表变更（Write-Through）
+   * - offline 模式下直接返回，不发起网络请求
+   * - 由 db.js 的 add/update/remove/addBulk 调用
    */
   async function pushChanges(tableName) {
+    // Task 3.6: offline 模式跳过推送
     if (stopped || state.mode === 'offline') return
     try {
       await pushTable(tableName)
@@ -383,6 +522,77 @@ export function createSyncEngine(config) {
     } catch (err) {
       console.error(`[Sync] pushChanges ${tableName}:`, err.message)
       // 推送失败不影响本地操作，_status 保持未同步，下次 sync 重试
+    }
+  }
+
+  // ============ Task 3.2: 网络状态检测与 online/offline 事件监听 ============
+
+  /** 设置网络状态监听器 */
+  function setupNetworkListeners() {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return
+
+    onlineHandler = () => {
+      console.info('[Sync] Network online, resuming sync')
+      // 网络恢复 → 立即同步 + 尝试 SSE
+      synchronize().then(() => {
+        if (!stopped && !sseSource) {
+          connectSSE()
+        }
+      }).catch(() => {})
+    }
+
+    offlineHandler = () => {
+      console.info('[Sync] Network offline')
+      // 网络断开 → offline 模式，停止定时器和 SSE
+      closeSse()
+      stopSyncTimer()
+      clearSseRetryTimer()
+      setState({ mode: 'offline', sse_connected: false })
+    }
+
+    window.addEventListener('online', onlineHandler)
+    window.addEventListener('offline', offlineHandler)
+  }
+
+  /** 移除网络状态监听器 */
+  function removeNetworkListeners() {
+    if (typeof window === 'undefined') return
+    if (onlineHandler) {
+      window.removeEventListener('online', onlineHandler)
+      onlineHandler = null
+    }
+    if (offlineHandler) {
+      window.removeEventListener('offline', offlineHandler)
+      offlineHandler = null
+    }
+  }
+
+  /** 清除 SSE 重连定时器 */
+  function clearSseRetryTimer() {
+    if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null }
+  }
+
+  // ============ Task 3.4: Android resumed 事件监听 ============
+
+  /** 设置 Tauri resumed 事件监听（Android 从后台恢复） */
+  async function setupResumedListener() {
+    try {
+      unlistenResumed = await listen('resumed', () => {
+        console.info('[Sync] App resumed from background')
+        if (!stopped) {
+          synchronize().catch(() => {})
+        }
+      })
+    } catch (_) {
+      // listen 可能在非 Tauri 环境下失败，忽略
+    }
+  }
+
+  /** 移除 resumed 事件监听 */
+  function removeResumedListener() {
+    if (unlistenResumed) {
+      unlistenResumed()
+      unlistenResumed = null
     }
   }
 
@@ -394,16 +604,39 @@ export function createSyncEngine(config) {
     stopped = false
     sseFailCount = 0
     retryAttempt = 0
+    checkpointTableReady = false
 
     setState({ active: true, mode: 'offline', error: null })
+
+    // Task 3.2: 设置网络状态监听
+    setupNetworkListeners()
+
+    // Task 3.4: 设置 Android resumed 监听
+    setupResumedListener()
+
+    // Task 3.2: 检查初始网络状态
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true
+
+    if (!isOnline) {
+      // 离线状态，不执行同步
+      setState({ mode: 'offline' })
+      emit()
+      return
+    }
 
     // 1. 执行一次完整的 pull-then-push 同步
     await synchronize()
 
-    // 2. 尝试 SSE 实时连接
-    connectSSE()
+    // 2. 尝试 SSE 实时连接（connectSSE 内部会检测 EventSource 可用性）
+    if (!stopped) {
+      connectSSE()
+    }
 
-    // 3. 如果 SSE 失败，startSyncTimer 会在 onerror 里启动
+    // 3. 如果 SSE 未连接且不在 realtime 模式，确保有轮询兜底
+    if (!stopped && state.mode !== 'realtime' && !syncTimer) {
+      startSyncTimer()
+    }
+
     emit()
   }
 
@@ -411,6 +644,14 @@ export function createSyncEngine(config) {
     stopped = true
     closeSse()
     stopSyncTimer()
+    clearSseRetryTimer()
+
+    // Task 3.2: 移除网络监听器
+    removeNetworkListeners()
+
+    // Task 3.4: 移除 resumed 监听器
+    removeResumedListener()
+
     setState({ active: false, mode: 'offline', sse_connected: false, syncing: false })
   }
 

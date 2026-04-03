@@ -19,9 +19,10 @@
 //! }
 //! ```
 
+use std::path::PathBuf;
 use tauri::{
     plugin::{self, TauriPlugin},
-    Manager, Runtime,
+    AppHandle, Manager, Runtime,
 };
 
 pub mod changelog;
@@ -58,21 +59,16 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             sync_status,
         ])
         .setup(|app, _api| {
-            // Resolve the app data directory from Tauri
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| -> Box<dyn std::error::Error> {
-                    format!("Failed to resolve app data dir: {}", e).into()
-                })?;
+            // Resolve the data directory (platform-specific)
+            let data_dir = resolve_data_dir(app)?;
 
             log::info!(
-                "offlite: initializing with app_data_dir = {}",
-                app_data_dir.display()
+                "offlite: initializing with data_dir = {}",
+                data_dir.display()
             );
 
             // Create the DatabaseManager
-            let db_manager = DatabaseManager::new(&app_data_dir).map_err(
+            let db_manager = DatabaseManager::new(&data_dir).map_err(
                 |e| -> Box<dyn std::error::Error> {
                     format!("Failed to create DatabaseManager: {}", e).into()
                 },
@@ -96,6 +92,51 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             Ok(())
         })
         .build()
+}
+
+// ---------------------------------------------------------------------------
+// Platform-specific data directory resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the data directory based on the current platform.
+///
+/// - Desktop (Windows/macOS/Linux): uses `{exe_dir}/data/`
+///   Falls back to `app_data_dir` if the exe directory is not writable.
+/// - Mobile (Android/iOS): uses `app.path().app_data_dir()`
+fn resolve_data_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let data_dir = exe_dir.join("data");
+                // Try to create the directory to test write permission
+                if std::fs::create_dir_all(&data_dir).is_ok() {
+                    // Test write by creating a temp file
+                    let test_file = data_dir.join(".write_test");
+                    if std::fs::write(&test_file, b"test").is_ok() {
+                        let _ = std::fs::remove_file(&test_file);
+                        log::info!(
+                            "offlite: using exe-relative data dir: {}",
+                            data_dir.display()
+                        );
+                        return Ok(data_dir);
+                    }
+                }
+                log::warn!(
+                    "offlite: exe dir not writable ({}), falling back to app_data_dir",
+                    data_dir.display()
+                );
+            }
+        }
+    }
+
+    // Mobile or fallback: use app_data_dir
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    log::info!("offlite: using app_data_dir: {}", app_data_dir.display());
+    Ok(app_data_dir)
 }
 
 // ---------------------------------------------------------------------------
