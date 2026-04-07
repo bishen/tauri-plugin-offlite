@@ -66,6 +66,7 @@ export function createSyncEngine(config) {
 
   let token = config.token || ''
   let projectId = null
+  let dbId = null  // SQLite 数据库标识（可能和 projectId/filter_key 不同）
   let tables = []
   let sseSource = null
   let syncTimer = null
@@ -141,7 +142,7 @@ export function createSyncEngine(config) {
   /** 获取某表所有未同步的记录（限 PUSH_BATCH_SIZE 条） */
   async function getUnsyncedDocs(table) {
     return await invoke('plugin:offlite|db_query', {
-      projectId,
+      projectId: dbId,
       sql: `SELECT _id, uid, companyId, p_id, createdAt, updatedAt, _deleted, _version, _status, data
             FROM ${table} WHERE _status != 'synced' LIMIT ${PUSH_BATCH_SIZE}`,
       params: [],
@@ -153,7 +154,7 @@ export function createSyncEngine(config) {
     if (!ids.length) return
     const ph = ids.map(() => '?').join(',')
     await invoke('plugin:offlite|db_execute', {
-      projectId,
+      projectId: dbId,
       sql: `UPDATE ${table} SET _status = 'synced' WHERE _id IN (${ph})`,
       params: ids,
     })
@@ -165,7 +166,7 @@ export function createSyncEngine(config) {
       if (c.deleted) {
         // 软删除（不覆盖本地未推送的修改）
         await invoke('plugin:offlite|db_execute', {
-          projectId,
+          projectId: dbId,
           sql: `UPDATE ${table} SET _deleted = 1, updatedAt = ?, _status = 'synced'
                 WHERE _id = ? AND _status = 'synced'`,
           params: [c.updatedAt, c.doc_id],
@@ -174,7 +175,7 @@ export function createSyncEngine(config) {
         const dataJson = typeof c.data === 'string' ? c.data : JSON.stringify(c.data || {})
         // 先检查本地是否有未推送的版本
         const local = await invoke('plugin:offlite|db_query', {
-          projectId,
+          projectId: dbId,
           sql: `SELECT _status FROM ${table} WHERE _id = ?`,
           params: [c.doc_id],
         })
@@ -186,7 +187,7 @@ export function createSyncEngine(config) {
         }
 
         await invoke('plugin:offlite|db_execute', {
-          projectId,
+          projectId: dbId,
           sql: `INSERT OR REPLACE INTO ${table}
                 (_id, uid, companyId, p_id, createdAt, updatedAt, _deleted, _version, _status, data)
                 VALUES (?, ?, ?, ?, ?, ?, 0, 1, 'synced', ?)`,
@@ -329,7 +330,7 @@ export function createSyncEngine(config) {
       if (conflict.server_data) {
         const dataJson = JSON.stringify(conflict.server_data)
         await invoke('plugin:offlite|db_execute', {
-          projectId,
+          projectId: dbId,
           sql: `UPDATE ${table} SET data = ?, updatedAt = ?, _status = 'synced' WHERE _id = ?`,
           params: [dataJson, conflict.server_updated_at, conflict.doc_id],
         })
@@ -404,7 +405,7 @@ export function createSyncEngine(config) {
   async function hasUnsyncedChanges() {
     for (const table of tables) {
       const rows = await invoke('plugin:offlite|db_query', {
-        projectId,
+        projectId: dbId,
         sql: `SELECT COUNT(*) as cnt FROM ${table} WHERE _status != 'synced'`,
         params: [],
       })
@@ -604,8 +605,9 @@ export function createSyncEngine(config) {
 
   // ============ 生命周期 ============
 
-  async function start(pid, tableNames) {
+  async function start(pid, tableNames, options = {}) {
     projectId = pid
+    dbId = options.dbId || pid  // 默认和 projectId 相同
     tables = tableNames || []
     stopped = false
     sseFailCount = 0
