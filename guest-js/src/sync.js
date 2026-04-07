@@ -192,7 +192,8 @@ export function createSyncEngine(config) {
                 VALUES (?, ?, ?, ?, ?, ?, 0, 1, 'synced', ?)`,
           params: [
             c.doc_id,
-            c.uid ?? null, c.company_id ?? null, c.p_id ?? null,
+            c.uid ?? null, c.company_id ?? null,
+            c.p_id ?? (c.data?.p_id) ?? null,
             c.createdAt || c.updatedAt, c.updatedAt,
             dataJson,
           ],
@@ -363,8 +364,9 @@ export function createSyncEngine(config) {
             hasMore = result.hasMore
           }
         } catch (err) {
-          console.error(`[Sync] Pull ${table} error:`, err.message)
-          errors.push(`Pull ${table}: ${err.message}`)
+          const msg = err?.message || String(err)
+          console.error(`[Sync] Pull ${table} error:`, msg)
+          errors.push(`Pull ${table}: ${msg}`)
         }
       }
 
@@ -379,8 +381,9 @@ export function createSyncEngine(config) {
             hasMore = docs.length >= PUSH_BATCH_SIZE
           }
         } catch (err) {
-          console.error(`[Sync] Push ${table} error:`, err.message)
-          errors.push(`Push ${table}: ${err.message}`)
+          const msg = err?.message || String(err)
+          console.error(`[Sync] Push ${table} error:`, msg)
+          errors.push(`Push ${table}: ${msg}`)
         }
       }
 
@@ -516,7 +519,9 @@ export function createSyncEngine(config) {
    */
   async function pushChanges(tableName) {
     // Task 3.6: offline 模式跳过推送
+    // 同时跳过不在同步表列表中的表
     if (stopped || state.mode === 'offline') return
+    if (!tables.includes(tableName)) return
     try {
       await pushTable(tableName)
       emit()
