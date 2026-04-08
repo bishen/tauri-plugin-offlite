@@ -162,6 +162,14 @@ export function createSyncEngine(config) {
 
   /** 应用服务端拉取的变更到本地 */
   async function applyPulledChanges(table, changes) {
+    // 确保表存在（SSE 推送可能在表建好之前到达）
+    try {
+      await invoke('plugin:offlite|db_create_tables', {
+        projectId: dbId,
+        schemas: [{ name: table, json_indexes: [] }]
+      })
+    } catch (_) { /* 表已存在则忽略 */ }
+
     for (const c of changes) {
       if (c.deleted) {
         // 软删除（不覆盖本地未推送的修改）
@@ -522,7 +530,10 @@ export function createSyncEngine(config) {
     // Task 3.6: offline 模式跳过推送
     // 同时跳过不在同步表列表中的表
     if (stopped || state.mode === 'offline') return
-    if (!tables.includes(tableName)) return
+    if (!tables.includes(tableName)) {
+      console.warn(`[Sync] pushChanges 跳过: ${tableName} 不在同步表列表中`, tables)
+      return
+    }
     try {
       await pushTable(tableName)
       emit()
