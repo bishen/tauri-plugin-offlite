@@ -462,7 +462,7 @@ export function createSyncEngine(config) {
             emit()
           }
         } catch (err) {
-          console.error('[Sync] SSE change error:', err)
+          console.warn('[Sync] SSE change skipped:', err?.message || err)
         }
       })
 
