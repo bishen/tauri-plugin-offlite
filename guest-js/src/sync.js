@@ -527,14 +527,13 @@ export function createSyncEngine(config) {
    * - 由 db.js 的 add/update/remove/addBulk 调用
    */
   async function pushChanges(tableName) {
-    // Task 3.6: offline 模式跳过推送
-    // 同时跳过不在同步表列表中的表
     if (stopped || state.mode === 'offline') return
     if (!tables.includes(tableName)) {
       console.warn(`[Sync] pushChanges 跳过: ${tableName} 不在同步表列表中`, tables)
       return
     }
     try {
+      console.log(`[Sync] pushChanges: ${tableName}`)
       await pushTable(tableName)
       emit()
     } catch (err) {
