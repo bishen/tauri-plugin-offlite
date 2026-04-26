@@ -628,15 +628,18 @@ export function createSyncEngine(config) {
     projectId = pid
     dbId = options.dbId || pid  // 默认和 projectId 相同
 
-    // 支持两种格式：纯字符串数组 或 带 entityType 的配置数组
+    // 支持两种格式：纯字符串数组、带 entityType 的配置数组、或混合数组
     tableEntityTypes = {}
-    if (Array.isArray(tableNames) && tableNames.length > 0 && typeof tableNames[0] === 'object') {
-      tables = tableNames.map(t => t.name)
+    tables = []
+    if (Array.isArray(tableNames)) {
       for (const t of tableNames) {
-        if (t.entityType) tableEntityTypes[t.name] = t.entityType
+        if (typeof t === 'object' && t.name) {
+          tables.push(t.name)
+          if (t.entityType) tableEntityTypes[t.name] = t.entityType
+        } else if (typeof t === 'string') {
+          tables.push(t)
+        }
       }
-    } else {
-      tables = tableNames || []
     }
 
     stopped = false
