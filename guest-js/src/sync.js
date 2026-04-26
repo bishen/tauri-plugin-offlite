@@ -68,6 +68,7 @@ export function createSyncEngine(config) {
   let projectId = null
   let dbId = null  // SQLite 数据库标识（可能和 projectId/filter_key 不同）
   let tables = []
+  let tableEntityTypes = {}  // table → entityType 映射
   let sseSource = null
   let syncTimer = null
   let sseFailCount = 0
@@ -281,7 +282,8 @@ export function createSyncEngine(config) {
   /** PULL：从服务端拉取变更 */
   async function pullTable(table) {
     const since = await getCheckpoint(table)
-    const url = `${baseUrl}/offlite/${table}/pull?since=${encodeURIComponent(since)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
+    const entityType = tableEntityTypes[table] || ''
+    const url = `${baseUrl}/offlite/${table}/pull?since=${encodeURIComponent(since)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}${entityType ? `&entity_type=${entityType}` : ''}`
 
     const resp = await fetchWithAuth(url, { headers: buildHeaders() })
     if (!resp.ok) throw new Error(`Pull ${table}: ${resp.status}`)
@@ -316,7 +318,8 @@ export function createSyncEngine(config) {
       return { op: 'upsert', doc_id: doc._id, data, updatedAt: doc.updatedAt }
     })
 
-    const encoded = encode({ changes, syncMode })
+    const entityType = tableEntityTypes[table] || undefined
+    const encoded = encode({ changes, syncMode, entityType })
     const body = new Blob([encoded], { type: 'application/sjs' })
     const pushUrl = `${baseUrl}/offlite/${table}/push`
     const resp = await fetchWithAuth(pushUrl, { method: 'POST', headers: buildHeaders(), body })
@@ -615,10 +618,27 @@ export function createSyncEngine(config) {
 
   // ============ 生命周期 ============
 
+  /**
+   * 启动同步
+   * @param {string} pid - 项目 ID
+   * @param {string[]|Array<{name: string, entityType?: string}>} tableNames - 表名数组或表配置数组
+   * @param {Object} options
+   */
   async function start(pid, tableNames, options = {}) {
     projectId = pid
     dbId = options.dbId || pid  // 默认和 projectId 相同
-    tables = tableNames || []
+
+    // 支持两种格式：纯字符串数组 或 带 entityType 的配置数组
+    tableEntityTypes = {}
+    if (Array.isArray(tableNames) && tableNames.length > 0 && typeof tableNames[0] === 'object') {
+      tables = tableNames.map(t => t.name)
+      for (const t of tableNames) {
+        if (t.entityType) tableEntityTypes[t.name] = t.entityType
+      }
+    } else {
+      tables = tableNames || []
+    }
+
     stopped = false
     sseFailCount = 0
     retryAttempt = 0

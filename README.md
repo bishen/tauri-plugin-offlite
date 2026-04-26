@@ -6,7 +6,8 @@
 
 - 每项目独立 SQLite 数据库（WAL 模式，并发读写）
 - Schema 驱动建表（固定元数据列 + JSON data 列）
-- 变更日志（_change_log）自动记录所有写操作
+- `_status` 列变更追踪（synced/created/updated/deleted，无需 changelog 表）
+- 统一数据模型支持（entityType 声明，标准实体自动路由到 sync schema）
 - 混合实时同步：SSE + write-through 推送 + 轮询兜底
 - 三级降级：实时 → 轮询 → 离线，自动切换
 - LWW（Last-Write-Wins）冲突解决
@@ -126,14 +127,16 @@ createdAt   TEXT NOT NULL,
 updatedAt   TEXT NOT NULL,
 _deleted    INTEGER DEFAULT 0,
 _version    INTEGER DEFAULT 1,
-data        TEXT NOT NULL          -- 业务数据 JSON
+_status     TEXT DEFAULT 'synced',  -- synced/created/updated/deleted
+data        TEXT NOT NULL           -- 业务数据 JSON
 ```
 
-### 变更日志
+> 注意：`_status` 列替代了原来的 `_change_log` 表，每次写操作从 2 次 IPC 减少到 1 次。
 
-```sql
-_change_log (id, table_name, doc_id, operation, data, timestamp, synced, sync_error)
-```
+### 统一数据模型（服务端）
+
+声明了 `entityType` 的标准实体，服务端会将数据写入 `sync` schema 的标准实体表（独立 PostgreSQL 列）。
+详见 [UNIFIED_DATA_MODEL.md](./UNIFIED_DATA_MODEL.md)。
 
 ### 全局数据库（global.db）
 
@@ -167,7 +170,16 @@ const engine = createSyncEngine({
 })
 
 engine.start('project_001', ['planning', 'sample'])
-engine.pushChanges('planning')  // write-through 即时推送
+
+// 或传入 entityType 配置（统一数据模型）
+engine.start('project_001', [
+  { name: 'planning_feature', entityType: 'sub_compartment' },
+  { name: 'samples', entityType: 'sample_plot' },
+  { name: 'dbh_actual', entityType: 'survey' },
+  'photos',  // 不传 entityType，走 offlite 旧路径
+])
+
+engine.pushChanges('planning_feature')  // write-through 即时推送
 engine.stop()
 ```
 
