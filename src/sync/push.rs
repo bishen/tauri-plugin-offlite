@@ -128,7 +128,7 @@ pub async fn push_changes(
         .map_err(|e| format!("Failed to encode push request as MessagePack: {}", e))?;
 
     let url = format!(
-        "{}/offlite/sync/{}/push",
+        "{}/offlite/{}/push",
         base_url.trim_end_matches('/'),
         table_name
     );

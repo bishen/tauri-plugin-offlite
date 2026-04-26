@@ -53,7 +53,7 @@ pub async fn pull_changes(
     filter_key: &str,
 ) -> Result<PullResponse, String> {
     let url = format!(
-        "{}/offlite/sync/{}/pull",
+        "{}/offlite/{}/pull",
         base_url.trim_end_matches('/'),
         table_name,
     );

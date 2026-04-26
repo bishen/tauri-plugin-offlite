@@ -281,7 +281,7 @@ export function createSyncEngine(config) {
   /** PULL：从服务端拉取变更 */
   async function pullTable(table) {
     const since = await getCheckpoint(table)
-    const url = `${baseUrl}/offlite/sync/${table}/pull?since=${encodeURIComponent(since)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
+    const url = `${baseUrl}/offlite/${table}/pull?since=${encodeURIComponent(since)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
 
     const resp = await fetchWithAuth(url, { headers: buildHeaders() })
     if (!resp.ok) throw new Error(`Pull ${table}: ${resp.status}`)
@@ -318,7 +318,7 @@ export function createSyncEngine(config) {
 
     const encoded = encode({ changes, syncMode })
     const body = new Blob([encoded], { type: 'application/sjs' })
-    const pushUrl = `${baseUrl}/offlite/sync/${table}/push`
+    const pushUrl = `${baseUrl}/offlite/${table}/push`
     const resp = await fetchWithAuth(pushUrl, { method: 'POST', headers: buildHeaders(), body })
     if (!resp.ok) throw new Error(`Push ${table}: ${resp.status}`)
 
@@ -448,7 +448,7 @@ export function createSyncEngine(config) {
       return
     }
 
-    const sseUrl = `${baseUrl}/offlite/sync/sse?token=${encodeURIComponent(token)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
+    const sseUrl = `${baseUrl}/offlite/sse?token=${encodeURIComponent(token)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
 
     try {
       sseSource = new EventSource(sseUrl)

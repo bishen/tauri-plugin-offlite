@@ -76,7 +76,7 @@ pub fn decode_change_event(data: &str) -> Result<SseChangeEvent, String> {
 /// Start a background SSE listener that connects to the server SSE endpoint.
 ///
 /// The listener:
-/// - Connects to `GET {base_url}/offlite/sync/sse?token=...&mode=...&filter_key=...`
+/// - Connects to `GET {base_url}/offlite/sse?token=...&mode=...&filter_key=...`
 /// - On "change" events: decodes Base64+MessagePack and calls `callback`
 /// - On "heartbeat" events: resets the heartbeat timer
 /// - If no heartbeat is received within `heartbeat_timeout_secs` → returns error
@@ -224,7 +224,7 @@ async fn run_sse_loop<C: Client>(
 
 fn build_sse_url(config: &SseConfig) -> String {
     format!(
-        "{}/offlite/sync/sse?token={}&mode={}&filter_key={}",
+        "{}/offlite/sse?token={}&mode={}&filter_key={}",
         config.base_url.trim_end_matches('/'),
         urlencoded(&config.token),
         urlencoded(&config.mode),
@@ -411,7 +411,7 @@ mod tests {
         let url = build_sse_url(&config);
         assert_eq!(
             url,
-            "https://api.example.com/offlite/sync/sse?token=my_jwt_token&mode=project&filter_key=p_001"
+            "https://api.example.com/offlite/sse?token=my_jwt_token&mode=project&filter_key=p_001"
         );
     }
 
@@ -426,7 +426,7 @@ mod tests {
         };
 
         let url = build_sse_url(&config);
-        assert!(url.starts_with("https://api.example.com/offlite/sync/sse?"));
+        assert!(url.starts_with("https://api.example.com/offlite/sse?"));
         assert!(!url.contains("//offlite"));
     }
 
