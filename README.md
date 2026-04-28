@@ -8,8 +8,8 @@
 - Schema 驱动建表（固定元数据列 + JSON data 列）
 - `_status` 列变更追踪（synced/created/updated/deleted，无需 changelog 表）
 - 统一数据模型支持（entityType 声明，标准实体自动路由到 sync schema）
-- 混合实时同步：SSE + write-through 推送 + 轮询兜底
-- 三级降级：实时 → 轮询 → 离线，自动切换
+- 混合实时同步：WebSocket 通知 + write-through 推送 + 轮询兜底
+- 三级降级：实时（WebSocket）→ 轮询 → 离线，自动切换
 - LWW（Last-Write-Wins）冲突解决
 - MessagePack 编码通信（Content-Type: application/sjs）
 - 指数退避重试（1s → 60s）

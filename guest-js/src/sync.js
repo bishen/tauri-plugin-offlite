@@ -211,6 +211,20 @@ export function createSyncEngine(config) {
         state.docs_pulled++
       }
     }
+
+    // 通知 App 层有新数据到达（用于 UI 实时刷新）
+    if (changes.length > 0) {
+      try {
+        const { emit: tauriEmit } = await import('@tauri-apps/api/event')
+        await tauriEmit('sync-data-changed', {
+          table,
+          docIds: changes.map(c => c.doc_id),
+          action: 'pull',
+        })
+      } catch (_) {
+        // 非 Tauri 环境忽略
+      }
+    }
   }
 
   // ============ Task 3.1: Checkpoint 表自动创建 ============
@@ -440,63 +454,84 @@ export function createSyncEngine(config) {
     return isAndroid() ? ANDROID_SYNC_INTERVAL : syncInterval
   }
 
-  function connectSSE() {
-    if (stopped || sseSource) return
+  // ============ WebSocket 实时通知 ============
 
-    // Task 3.4: 检测 EventSource 是否可用
-    if (!hasEventSource()) {
-      console.warn('[Sync] EventSource not available, falling back to polling')
-      setState({ mode: 'polling', sse_connected: false })
-      startSyncTimer()
-      return
-    }
+  let wsConnection = null
+  let wsRetryTimer = null
+  let wsFailCount = 0
 
-    const sseUrl = `${baseUrl}/offlite/sse?token=${encodeURIComponent(token)}&mode=${syncMode}&filter_key=${encodeURIComponent(projectId)}&app=${appName}`
+  // 防抖：200ms 窗口内合并同一表的多个通知
+  const pendingPulls = new Map() // table → timeout
+  const DEBOUNCE_MS = 200
+
+  function connectWebSocket() {
+    if (stopped || wsConnection) return
+
+    const wsUrl = baseUrl.replace(/^http/, 'ws') + '/offlite/ws?token=' + encodeURIComponent(token) + '&app=' + appName
 
     try {
-      sseSource = new EventSource(sseUrl)
+      wsConnection = new WebSocket(wsUrl)
 
-      sseSource.onopen = () => {
-        sseFailCount = 0
+      wsConnection.onopen = () => {
+        wsFailCount = 0
         retryAttempt = 0
         setState({ mode: 'realtime', sse_connected: true, error: null })
-        // SSE 连接成功后停止定时同步
         stopSyncTimer()
       }
 
-      sseSource.addEventListener('change', async (event) => {
+      wsConnection.onmessage = async (event) => {
         try {
-          const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0))
-          const { table, changes } = decode(bytes)
-          if (table && changes?.length) {
-            await applyPulledChanges(table, changes)
-            emit()
+          const bytes = event.data instanceof ArrayBuffer
+            ? new Uint8Array(event.data)
+            : new Uint8Array(await event.data.arrayBuffer())
+          const { table: notifyTable, syncMode: notifySyncMode, filterKey: notifyFilterKey } = decode(bytes)
+
+          if (!notifyTable) return
+          // 只处理当前正在同步的表
+          if (!tables.includes(notifyTable)) return
+
+          // 防抖：合并 200ms 内同一表的多个通知
+          if (pendingPulls.has(notifyTable)) {
+            clearTimeout(pendingPulls.get(notifyTable))
           }
+          pendingPulls.set(notifyTable, setTimeout(async () => {
+            pendingPulls.delete(notifyTable)
+            try {
+              let hasMore = true
+              while (hasMore) {
+                const result = await pullTable(notifyTable)
+                hasMore = result.hasMore
+              }
+              emit()
+            } catch (err) {
+              console.warn('[Sync] WS pull failed for ' + notifyTable + ':', err?.message || err)
+            }
+          }, DEBOUNCE_MS))
         } catch (err) {
-          console.warn('[Sync] SSE change skipped:', err?.message || err)
+          console.warn('[Sync] WS message skipped:', err?.message || err)
         }
-      })
+      }
 
-      sseSource.addEventListener('heartbeat', () => {
-        // heartbeat 确认连接存活，无需额外操作
-      })
+      wsConnection.onclose = () => {
+        wsConnection = null
+        state.sse_connected = false
+        wsFailCount++
 
-      sseSource.onerror = () => {
-        sseFailCount++
-        closeSse()
+        if (stopped) return
 
-        const maxFailures = getMaxSseFailures()
-
-        if (sseFailCount >= maxFailures) {
-          // 超过阈值，降级为轮询
+        if (wsFailCount >= MAX_SSE_FAILURES) {
           setState({ mode: 'polling', sse_connected: false })
           startSyncTimer()
         } else {
           // 指数退避重连
           const delay = Math.min(BACKOFF_INITIAL * Math.pow(BACKOFF_FACTOR, retryAttempt), BACKOFF_MAX)
           retryAttempt++
-          sseRetryTimer = setTimeout(() => connectSSE(), delay)
+          wsRetryTimer = setTimeout(() => connectWebSocket(), delay)
         }
+      }
+
+      wsConnection.onerror = () => {
+        // onerror 后会触发 onclose，在 onclose 中处理重连
       }
     } catch (_) {
       setState({ mode: 'polling', sse_connected: false })
@@ -504,8 +539,20 @@ export function createSyncEngine(config) {
     }
   }
 
-  function closeSse() {
-    if (sseSource) { sseSource.close(); sseSource = null }
+  function closeWebSocket() {
+    if (wsConnection) {
+      wsConnection.close()
+      wsConnection = null
+    }
+    if (wsRetryTimer) {
+      clearTimeout(wsRetryTimer)
+      wsRetryTimer = null
+    }
+    // 清除所有待处理的防抖 pull
+    for (const timer of pendingPulls.values()) {
+      clearTimeout(timer)
+    }
+    pendingPulls.clear()
     state.sse_connected = false
   }
 
@@ -514,7 +561,7 @@ export function createSyncEngine(config) {
   function startSyncTimer() {
     stopSyncTimer()
     if (stopped) return
-    const interval = getSyncInterval()
+    const interval = isAndroid() ? ANDROID_SYNC_INTERVAL : syncInterval
     syncTimer = setInterval(() => synchronize(), interval)
   }
 
@@ -555,8 +602,8 @@ export function createSyncEngine(config) {
       console.info('[Sync] Network online, resuming sync')
       // 网络恢复 → 立即同步 + 尝试 SSE
       synchronize().then(() => {
-        if (!stopped && !sseSource) {
-          connectSSE()
+        if (!stopped && !wsConnection) {
+          connectWebSocket()
         }
       }).catch(() => {})
     }
@@ -564,9 +611,8 @@ export function createSyncEngine(config) {
     offlineHandler = () => {
       console.info('[Sync] Network offline')
       // 网络断开 → offline 模式，停止定时器和 SSE
-      closeSse()
+      closeWebSocket()
       stopSyncTimer()
-      clearSseRetryTimer()
       setState({ mode: 'offline', sse_connected: false })
     }
 
@@ -587,10 +633,7 @@ export function createSyncEngine(config) {
     }
   }
 
-  /** 清除 SSE 重连定时器 */
-  function clearSseRetryTimer() {
-    if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null }
-  }
+  /** (removed — WebSocket handles reconnect internally) */
 
   // ============ Task 3.4: Android resumed 事件监听 ============
 
@@ -668,12 +711,12 @@ export function createSyncEngine(config) {
     // 1. 执行一次完整的 pull-then-push 同步
     await synchronize()
 
-    // 2. 尝试 SSE 实时连接（connectSSE 内部会检测 EventSource 可用性）
+    // 2. 建立 WebSocket 实时连接
     if (!stopped) {
-      connectSSE()
+      connectWebSocket()
     }
 
-    // 3. 如果 SSE 未连接且不在 realtime 模式，确保有轮询兜底
+    // 3. 如果 WebSocket 未连接且不在 realtime 模式，确保有轮询兜底
     if (!stopped && state.mode !== 'realtime' && !syncTimer) {
       startSyncTimer()
     }
@@ -683,14 +726,13 @@ export function createSyncEngine(config) {
 
   function stop() {
     stopped = true
-    closeSse()
+    closeWebSocket()
     stopSyncTimer()
-    clearSseRetryTimer()
 
-    // Task 3.2: 移除网络监听器
+    // 移除网络监听器
     removeNetworkListeners()
 
-    // Task 3.4: 移除 resumed 监听器
+    // 移除 resumed 监听器
     removeResumedListener()
 
     setState({ active: false, mode: 'offline', sse_connected: false, syncing: false })
