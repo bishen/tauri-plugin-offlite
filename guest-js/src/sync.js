@@ -575,20 +575,32 @@ export function createSyncEngine(config) {
    * 写入后立即推送单表变更（Write-Through）
    * - offline 模式下直接返回，不发起网络请求
    * - 由 db.js 的 add/update/remove/addBulk 调用
+   * - 循环 push 直到所有未同步记录清空（批量导入场景）
+   * - 串行执行：如果已有 push 在进行中，等待完成后再检查是否还有未同步记录
    */
+  const pushingTables = new Set()
   async function pushChanges(tableName) {
     if (stopped || state.mode === 'offline') return
     if (!tables.includes(tableName)) {
       console.warn(`[Sync] pushChanges 跳过: ${tableName} 不在同步表列表中`, tables)
       return
     }
+    // 防止同一表并发 push
+    if (pushingTables.has(tableName)) return
+    pushingTables.add(tableName)
     try {
-      console.log(`[Sync] pushChanges: ${tableName}`)
-      await pushTable(tableName)
+      let hasMore = true
+      while (hasMore) {
+        const docs = await getUnsyncedDocs(tableName)
+        if (!docs.length) break
+        await pushTable(tableName)
+        hasMore = docs.length >= PUSH_BATCH_SIZE
+      }
       emit()
     } catch (err) {
       console.error(`[Sync] pushChanges ${tableName}:`, err.message)
-      // 推送失败不影响本地操作，_status 保持未同步，下次 sync 重试
+    } finally {
+      pushingTables.delete(tableName)
     }
   }
 
