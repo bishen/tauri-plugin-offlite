@@ -161,3 +161,48 @@ engine.stop()
 3. **SSE 增量**：实时变更通过 SSE 推送，不需要轮询
 4. **分表推送**：每个表独立推送，大表不阻塞小表
 5. **压缩传输**：MessagePack 编码，比 JSON 小 30-50%
+
+
+## 应用层协同模式：小班区划多端实时协同
+
+基于 Offlite 同步引擎，应用层实现了小班区划（planning_feature）的多端多人实时协同编辑。
+
+### 增量保存模式
+
+每次 mapbox-gl-draw 的绘制事件（`draw.create`/`draw.update`/`draw.delete`）触发增量保存：
+
+```
+draw 事件 → scheduleIncrementalSave() (500ms 防抖)
+  → addFeature() / saveFeature() / deleteFeature() (单条记录)
+  → db.add/update/remove → _status 标记 → pushChanges() (write-through)
+```
+
+替代了原来的全量 `replaceAllFeatures()`，手动"保存"按钮仍保留全量替换作为兜底。
+
+### feature_id → docId 映射
+
+三层 ID 映射关系：
+
+| ID 类型 | 说明 | 生命周期 |
+|---------|------|---------|
+| draw 内部 ID | mapbox-gl-draw 分配 | 每次加载不同 |
+| feature_id (`properties._id`) | 小班业务编号 | 跨设备一致 |
+| _id (docId) | 数据库记录主键 | 跨设备一致 |
+
+映射表 `featureIdToDocId: Map<feature_id, _id>` 在进入编辑模式时构建，`addFeature` 后更新，`deleteFeature` 后移除，退出编辑模式时清空。
+
+### 编辑模式远程变更保护
+
+当远程变更到达时，通过 `draw.getSelectedIds()` 检测正在编辑的小班：
+- **未选中的小班**：立即合并远程变更到 draw 图层
+- **正在编辑的小班**：跳过远程更新，由 LWW 在下次 pull-then-push 同步时自动解决冲突
+
+### 增量/全量刷新阈值
+
+远程变更到达后的刷新策略：
+- `docIds.length ≤ 10`：增量合并（按 feature_id 匹配替换/新增/删除）
+- `docIds.length > 10`：全量重载（裁剪导入等批量场景）
+
+### 拓扑修复检测
+
+draw.js 的 `ensureSharedVertices()` 维护共边拓扑时可能修改相邻小班的 geometry。通过 geometry 快照对比（`lastSavedGeometries`）检测间接变更并一并保存，确保所有受影响的小班都被推送到服务端。

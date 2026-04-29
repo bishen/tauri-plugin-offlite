@@ -171,9 +171,31 @@ export function createSyncEngine(config) {
       })
     } catch (_) { /* 表已存在则忽略 */ }
 
+    const conflicts = [] // 收集"删除 vs 编辑"冲突
+
     for (const c of changes) {
       if (c.deleted) {
-        // 软删除（不覆盖本地未推送的修改）
+        // 检查本地是否有未推送的修改（冲突检测：delete vs edit）
+        const local = await invoke('plugin:offlite|db_query', {
+          projectId: dbId,
+          sql: `SELECT _status, data FROM ${table} WHERE _id = ?`,
+          params: [c.doc_id],
+        })
+        const localStatus = local?.[0]?._status
+
+        if (localStatus && localStatus !== 'synced') {
+          // 冲突：服务端删除但本地有未推送的修改，记录冲突由用户决定
+          conflicts.push({
+            type: 'delete_vs_edit',
+            doc_id: c.doc_id,
+            localStatus,
+            serverAction: 'delete',
+            serverUpdatedAt: c.updatedAt,
+          })
+          continue
+        }
+
+        // 无冲突：正常执行软删除
         await invoke('plugin:offlite|db_execute', {
           projectId: dbId,
           sql: `UPDATE ${table} SET _deleted = 1, updatedAt = ?, _status = 'synced'
@@ -212,13 +234,24 @@ export function createSyncEngine(config) {
       }
     }
 
+    // 通知 UI 层存在"删除 vs 编辑"冲突，由用户决定
+    if (conflicts.length > 0) {
+      try {
+        const { emit: tauriEmit } = await import('@tauri-apps/api/event')
+        await tauriEmit('sync-conflict', { table, conflicts })
+      } catch (_) {}
+    }
+
     // 通知 App 层有新数据到达（用于 UI 实时刷新）
     if (changes.length > 0) {
       try {
         const { emit: tauriEmit } = await import('@tauri-apps/api/event')
+        const upsertedDocIds = changes.filter(c => !c.deleted).map(c => c.doc_id)
+        const deletedDocIds = changes.filter(c => c.deleted).map(c => c.doc_id)
         await tauriEmit('sync-data-changed', {
           table,
-          docIds: changes.map(c => c.doc_id),
+          docIds: upsertedDocIds,
+          deletedDocIds,
           action: 'pull',
         })
       } catch (_) {
@@ -484,7 +517,18 @@ export function createSyncEngine(config) {
           const bytes = event.data instanceof ArrayBuffer
             ? new Uint8Array(event.data)
             : new Uint8Array(await event.data.arrayBuffer())
-          const { table: notifyTable, syncMode: notifySyncMode, filterKey: notifyFilterKey } = decode(bytes)
+          const msg = decode(bytes)
+
+          // 编辑锁消息路由
+          if (msg.type === 'edit_lock') {
+            try {
+              const { emit: tauriEmit } = await import('@tauri-apps/api/event')
+              await tauriEmit('edit-lock-changed', msg)
+            } catch (_) {}
+            return
+          }
+
+          const { table: notifyTable, syncMode: notifySyncMode, filterKey: notifyFilterKey } = msg
 
           if (!notifyTable) return
           // 只处理当前正在同步的表
@@ -750,6 +794,14 @@ export function createSyncEngine(config) {
     setState({ active: false, mode: 'offline', sse_connected: false, syncing: false })
   }
 
+  /** 通过 WebSocket 发送自定义消息（用于编辑锁等），离线时静默失败 */
+  function sendMessage(data) {
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+      wsConnection.send(data instanceof Uint8Array ? data : new Blob([data]))
+    }
+    // 离线时 WebSocket 不可用，静默失败
+  }
+
   return {
     start,
     stop,
@@ -759,5 +811,6 @@ export function createSyncEngine(config) {
     updateToken,
     getState: () => ({ ...state }),
     onStateChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
+    sendMessage,
   }
 }
