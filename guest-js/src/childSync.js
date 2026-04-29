@@ -43,7 +43,7 @@ async function sha256(text) {
  * 创建父子表关联同步实例
  *
  * @param {Object} config
- * @param {Object} config.childDB - 子表的 DB 实例（usePouchDB/defineSyncModel 返回的对象）
+ * @param {Object} config.childDB - 子表的 DB 实例（useDB/defineSyncModel 返回的对象）
  * @param {Object} config.parentDB - 父表的 DB 实例
  * @param {string} config.filterField - 子表中关联父表的字段名（如 'p_id'）
  * @param {string} config.countField - 父表中存储子记录数量的字段名（如 'featureCount'）
