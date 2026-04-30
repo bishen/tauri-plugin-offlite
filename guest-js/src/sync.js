@@ -500,33 +500,53 @@ export function createSyncEngine(config) {
   function connectWebSocket() {
     if (stopped || wsConnection) return
 
-    const wsUrl = baseUrl.replace(/^http/, 'ws') + '/offlite/ws?token=' + encodeURIComponent(token) + '&app=' + appName
+    const wsUrl = baseUrl.replace(/^http/, 'ws') + '/offlite/ws?app=' + appName
+    let wsAuthenticated = false
 
     try {
       wsConnection = new WebSocket(wsUrl)
 
       wsConnection.onopen = () => {
-        wsFailCount = 0
-        retryAttempt = 0
-        setState({ mode: 'realtime', sse_connected: true, error: null })
-        stopSyncTimer()
+        // 连接建立后发送 auth 消息（不在 URL 中暴露 token）
+        wsConnection.send(JSON.stringify({ type: 'auth', token }))
       }
 
       wsConnection.onmessage = async (event) => {
         try {
+          // 支持文本消息（auth 响应）和二进制消息（数据通知）
+          if (typeof event.data === 'string') {
+            const msg = JSON.parse(event.data)
+            if (msg.type === 'auth_ok') {
+              wsAuthenticated = true
+              wsFailCount = 0
+              retryAttempt = 0
+              setState({ mode: 'realtime', sse_connected: true, error: null })
+              stopSyncTimer()
+              return
+            }
+            if (msg.type === 'auth_fail') {
+              console.error('[Sync] WS auth failed:', msg.error)
+              wsConnection.close(4001, 'Auth failed')
+              return
+            }
+            // 编辑锁等 JSON 消息
+            if (msg.type === 'edit_lock') {
+              try {
+                const { emit: tauriEmit } = await import('@tauri-apps/api/event')
+                await tauriEmit('edit-lock-changed', msg)
+              } catch (_) {}
+              return
+            }
+            return
+          }
+
+          // 二进制消息（MessagePack 编码的数据通知）
+          if (!wsAuthenticated) return // 未认证前忽略数据消息
+
           const bytes = event.data instanceof ArrayBuffer
             ? new Uint8Array(event.data)
             : new Uint8Array(await event.data.arrayBuffer())
           const msg = decode(bytes)
-
-          // 编辑锁消息路由
-          if (msg.type === 'edit_lock') {
-            try {
-              const { emit: tauriEmit } = await import('@tauri-apps/api/event')
-              await tauriEmit('edit-lock-changed', msg)
-            } catch (_) {}
-            return
-          }
 
           const { table: notifyTable, syncMode: notifySyncMode, filterKey: notifyFilterKey } = msg
 
@@ -797,7 +817,8 @@ export function createSyncEngine(config) {
   /** 通过 WebSocket 发送自定义消息（用于编辑锁等），离线时静默失败 */
   function sendMessage(data) {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-      wsConnection.send(data instanceof Uint8Array ? data : new Blob([data]))
+      // 字符串直接发送（文本帧），二进制数据原样发送
+      wsConnection.send(data)
     }
     // 离线时 WebSocket 不可用，静默失败
   }
