@@ -543,10 +543,17 @@ export function createSyncEngine(config) {
           // 二进制消息（MessagePack 编码的数据通知）
           if (!wsAuthenticated) return // 未认证前忽略数据消息
 
-          const bytes = event.data instanceof ArrayBuffer
-            ? new Uint8Array(event.data)
-            : new Uint8Array(await event.data.arrayBuffer())
+          let bytes
+          if (event.data instanceof ArrayBuffer) {
+            bytes = new Uint8Array(event.data)
+          } else if (event.data instanceof Blob) {
+            bytes = new Uint8Array(await event.data.arrayBuffer())
+          } else {
+            console.warn('[Sync] WS unknown data type:', typeof event.data, event.data)
+            return
+          }
           const msg = decode(bytes)
+          console.log('[Sync] WS 收到通知:', msg.table, msg)
 
           const { table: notifyTable, syncMode: notifySyncMode, filterKey: notifyFilterKey } = msg
 
