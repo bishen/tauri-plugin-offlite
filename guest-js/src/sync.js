@@ -203,20 +203,44 @@ export function createSyncEngine(config) {
           params: [c.updatedAt, c.doc_id],
         })
       } else {
-        const dataJson = typeof c.data === 'string' ? c.data : JSON.stringify(c.data || {})
+        const serverData = typeof c.data === 'string' ? JSON.parse(c.data) : (c.data || {})
         // 先检查本地是否有未推送的版本
         const local = await invoke('plugin:offlite|db_query', {
           projectId: dbId,
-          sql: `SELECT _status FROM ${table} WHERE _id = ?`,
+          sql: `SELECT _status, data FROM ${table} WHERE _id = ?`,
           params: [c.doc_id],
         })
         const localStatus = local?.[0]?._status
 
         if (localStatus && localStatus !== 'synced') {
-          // 本地有未推送的修改，跳过（push 时由服务端 LWW 决定）
+          // 本地有未推送的修改 → 字段级合并（服务端新字段补入，本地已修改字段保留）
+          // 这样多端同时操作同一条子记录时，不会丢失对方的变更
+          try {
+            const localDataRaw = local[0]?.data
+            const localData = localDataRaw
+              ? (typeof localDataRaw === 'string' ? JSON.parse(localDataRaw) : localDataRaw)
+              : {}
+            // 合并策略：先铺服务端数据，再覆盖本地数据（本地优先，因为本地有未推送的修改）
+            // 对于嵌套的 properties 对象，也做字段级合并
+            const merged = { ...serverData, ...localData }
+            if (serverData.properties && localData.properties) {
+              merged.properties = { ...serverData.properties, ...localData.properties }
+            }
+            const mergedJson = JSON.stringify(merged)
+            await invoke('plugin:offlite|db_execute', {
+              projectId: dbId,
+              sql: `UPDATE ${table} SET data = ? WHERE _id = ?`,
+              params: [mergedJson, c.doc_id],
+            })
+            state.docs_pulled++
+          } catch (mergeErr) {
+            // 合并失败时回退到原策略：跳过，让 push 时由服务端 LWW 决定
+            console.warn('[Sync] 字段合并失败，跳过:', c.doc_id, mergeErr?.message)
+          }
           continue
         }
 
+        const dataJson = JSON.stringify(serverData)
         await invoke('plugin:offlite|db_execute', {
           projectId: dbId,
           sql: `INSERT OR REPLACE INTO ${table}
