@@ -546,6 +546,13 @@ export function createSyncEngine(config) {
               retryAttempt = 0
               setState({ mode: 'realtime', sse_connected: true, error: null })
               stopSyncTimer()
+              // WS 认证成功后兜底推送一次所有未同步记录
+              // （防止 pushChanges 并发丢失、或上次会话异常退出留下的未推送数据）
+              for (const tbl of tables) {
+                pushChanges(tbl).catch(() => {})
+              }
+              // 启动低频 push 兜底定时器（realtime 模式下不启动全量 sync 定时器）
+              startPushBackupTimer()
               return
             }
             if (msg.type === 'auth_fail') {
@@ -648,6 +655,7 @@ export function createSyncEngine(config) {
       clearTimeout(timer)
     }
     pendingPulls.clear()
+    stopPushBackupTimer()
     state.sse_connected = false
   }
 
@@ -662,6 +670,27 @@ export function createSyncEngine(config) {
 
   function stopSyncTimer() {
     if (syncTimer) { clearInterval(syncTimer); syncTimer = null }
+  }
+
+  // ============ Realtime 模式下的 push 兜底定时器 ============
+  // WS 连接成功后会停掉全量 sync 定时器（stopSyncTimer），
+  // 但仍需一个低频定时器兜底推送未同步记录（防止 pushChanges 并发丢失）
+  let pushBackupTimer = null
+  const PUSH_BACKUP_INTERVAL = 60000
+
+  function startPushBackupTimer() {
+    stopPushBackupTimer()
+    if (stopped) return
+    pushBackupTimer = setInterval(() => {
+      if (stopped || state.mode === 'offline') return
+      for (const tbl of tables) {
+        pushChanges(tbl).catch(() => {})
+      }
+    }, PUSH_BACKUP_INTERVAL)
+  }
+
+  function stopPushBackupTimer() {
+    if (pushBackupTimer) { clearInterval(pushBackupTimer); pushBackupTimer = null }
   }
 
   // ============ Task 3.6: pushChanges() offline 模式跳过 ============
