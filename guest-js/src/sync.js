@@ -671,31 +671,42 @@ export function createSyncEngine(config) {
    * - offline 模式下直接返回，不发起网络请求
    * - 由 db.js 的 add/update/remove/addBulk 调用
    * - 循环 push 直到所有未同步记录清空（批量导入场景）
-   * - 串行执行：如果已有 push 在进行中，等待完成后再检查是否还有未同步记录
+   * - 串行执行：如果已有 push 在进行中，设置 pending 标志，当前循环结束后继续 push
    */
   const pushingTables = new Set()
+  const pendingPushTables = new Set()  // 有并发调用时设置，当前循环结束后再跑一次
   async function pushChanges(tableName) {
     if (stopped || state.mode === 'offline') return
     if (!tables.includes(tableName)) {
       console.warn(`[Sync] pushChanges 跳过: ${tableName} 不在同步表列表中`, tables)
       return
     }
-    // 防止同一表并发 push
-    if (pushingTables.has(tableName)) return
+    // 已有 push 在进行 → 标记 pending，当前循环结束后会再跑一次
+    // （防止并发 add 时，第一次循环的 getUnsyncedDocs 漏掉后入库的记录）
+    if (pushingTables.has(tableName)) {
+      pendingPushTables.add(tableName)
+      return
+    }
     pushingTables.add(tableName)
     try {
-      let hasMore = true
-      while (hasMore) {
-        const docs = await getUnsyncedDocs(tableName)
-        if (!docs.length) break
-        await pushTable(tableName)
-        hasMore = docs.length >= PUSH_BATCH_SIZE
-      }
+      // 外层循环：处理 pending 标志
+      do {
+        pendingPushTables.delete(tableName)
+        // 内层循环：push 所有未同步记录
+        let hasMore = true
+        while (hasMore) {
+          const docs = await getUnsyncedDocs(tableName)
+          if (!docs.length) break
+          await pushTable(tableName)
+          hasMore = docs.length >= PUSH_BATCH_SIZE
+        }
+      } while (pendingPushTables.has(tableName))
       emit()
     } catch (err) {
       console.error(`[Sync] pushChanges ${tableName}:`, err.message)
     } finally {
       pushingTables.delete(tableName)
+      pendingPushTables.delete(tableName)
     }
   }
 
