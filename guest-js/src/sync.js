@@ -175,31 +175,12 @@ export function createSyncEngine(config) {
 
     for (const c of changes) {
       if (c.deleted) {
-        // 检查本地是否有未推送的修改（冲突检测：delete vs edit）
-        const local = await invoke('plugin:offlite|db_query', {
-          projectId: dbId,
-          sql: `SELECT _status, data FROM ${table} WHERE _id = ?`,
-          params: [c.doc_id],
-        })
-        const localStatus = local?.[0]?._status
-
-        if (localStatus && localStatus !== 'synced') {
-          // 冲突：服务端删除但本地有未推送的修改，记录冲突由用户决定
-          conflicts.push({
-            type: 'delete_vs_edit',
-            doc_id: c.doc_id,
-            localStatus,
-            serverAction: 'delete',
-            serverUpdatedAt: c.updatedAt,
-          })
-          continue
-        }
-
-        // 无冲突：正常执行软删除
+        // 服务端删除：无论本地状态如何，都执行软删除
+        // （如果本地有未推送的修改，服务端的删除优先 — 数据已被其他用户删除）
         await invoke('plugin:offlite|db_execute', {
           projectId: dbId,
           sql: `UPDATE ${table} SET _deleted = 1, updatedAt = ?, _status = 'synced'
-                WHERE _id = ? AND _status = 'synced'`,
+                WHERE _id = ?`,
           params: [c.updatedAt, c.doc_id],
         })
       } else {
@@ -213,29 +194,18 @@ export function createSyncEngine(config) {
         const localStatus = local?.[0]?._status
 
         if (localStatus && localStatus !== 'synced') {
-          // 本地有未推送的修改 → 字段级合并（服务端新字段补入，本地已修改字段保留）
-          // 这样多端同时操作同一条子记录时，不会丢失对方的变更
+          // 本地有未推送的修改 → 用服务端数据覆盖本地 data（服务端更新优先）
+          // _status 保持不变（本地修改仍需 push，push 时由服务端 LWW 决定最终版本）
           try {
-            const localDataRaw = local[0]?.data
-            const localData = localDataRaw
-              ? (typeof localDataRaw === 'string' ? JSON.parse(localDataRaw) : localDataRaw)
-              : {}
-            // 合并策略：先铺服务端数据，再覆盖本地数据（本地优先，因为本地有未推送的修改）
-            // 对于嵌套的 properties 对象，也做字段级合并
-            const merged = { ...serverData, ...localData }
-            if (serverData.properties && localData.properties) {
-              merged.properties = { ...serverData.properties, ...localData.properties }
-            }
-            const mergedJson = JSON.stringify(merged)
+            const dataJson = JSON.stringify(serverData)
             await invoke('plugin:offlite|db_execute', {
               projectId: dbId,
-              sql: `UPDATE ${table} SET data = ? WHERE _id = ?`,
-              params: [mergedJson, c.doc_id],
+              sql: `UPDATE ${table} SET data = ?, updatedAt = ? WHERE _id = ?`,
+              params: [dataJson, c.updatedAt, c.doc_id],
             })
             state.docs_pulled++
           } catch (mergeErr) {
-            // 合并失败时回退到原策略：跳过，让 push 时由服务端 LWW 决定
-            console.warn('[Sync] 字段合并失败，跳过:', c.doc_id, mergeErr?.message)
+            console.warn('[Sync] 覆盖本地数据失败，跳过:', c.doc_id, mergeErr?.message)
           }
           continue
         }
