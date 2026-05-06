@@ -364,10 +364,11 @@ export function createSyncEngine(config) {
 
     if (result.changes?.length) {
       await applyPulledChanges(table, result.changes)
-    }
-
-    if (result.server_time) {
-      await setCheckpoint(table, result.server_time)
+      // 只在有实际变更时才更新 checkpoint
+      // 防止 server_time 跳过了还未返回的并发写入记录
+      if (result.server_time) {
+        await setCheckpoint(table, result.server_time)
+      }
     }
 
     return { pulled: result.changes?.length || 0, hasMore: result.has_more }
@@ -894,6 +895,19 @@ export function createSyncEngine(config) {
     // 离线时 WebSocket 不可用，静默失败
   }
 
+  /** 重置所有表的 checkpoint（强制下次 pull 全量拉取） */
+  async function resetCheckpoints() {
+    await ensureCheckpointTable()
+    for (const table of tables) {
+      await invoke('plugin:offlite|db_execute', {
+        projectId: 'global',
+        sql: `DELETE FROM _sync_checkpoint WHERE table_name = ? AND sync_mode = ? AND filter_key = ?`,
+        params: [table, syncMode, projectId],
+      })
+    }
+    console.info('[Sync] 已重置所有 checkpoint，下次 pull 将全量拉取')
+  }
+
   return {
     start,
     stop,
@@ -901,6 +915,7 @@ export function createSyncEngine(config) {
     pushChanges,
     hasUnsyncedChanges,
     updateToken,
+    resetCheckpoints,
     getState: () => ({ ...state }),
     onStateChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
     sendMessage,
