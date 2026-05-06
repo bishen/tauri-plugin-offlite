@@ -161,6 +161,21 @@ export function createSyncEngine(config) {
     })
   }
 
+  /**
+   * 标准化 pull 数据的 key：camelCase → snake_case
+   * 服务端标准实体 pull 路径会做 snakeToCamel 转换，客户端需要转回来
+   */
+  function normalizePulledKeys(data) {
+    if (!data || typeof data !== 'object') return data
+    const result = {}
+    for (const [key, value] of Object.entries(data)) {
+      // camelCase → snake_case
+      const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)
+      result[snakeKey] = value
+    }
+    return result
+  }
+
   /** 应用服务端拉取的变更到本地 */
   async function applyPulledChanges(table, changes) {
     // 确保表存在（SSE 推送可能在表建好之前到达）
@@ -184,7 +199,9 @@ export function createSyncEngine(config) {
           params: [c.updatedAt, c.doc_id],
         })
       } else {
-        const serverData = typeof c.data === 'string' ? JSON.parse(c.data) : (c.data || {})
+        let serverData = typeof c.data === 'string' ? JSON.parse(c.data) : (c.data || {})
+        // 标准化 key：服务端 pull 可能返回 camelCase，统一转为 snake_case 存储
+        serverData = normalizePulledKeys(serverData)
         // 先检查本地是否有未推送的版本
         const local = await invoke('plugin:offlite|db_query', {
           projectId: dbId,
