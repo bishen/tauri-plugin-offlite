@@ -74,21 +74,36 @@ export function createSyncManager(config) {
 
   /**
    * 注册模型到管理器
+   * 如果对应的同步引擎已启动，会动态加入到运行中的引擎
    * @param {Object} model - defineSchema() 返回的模型描述对象
    */
   function register(model) {
     const { dbName, syncMode, entityType } = model
     const entry = { entityType }
+    const tableConfig = entityType ? { name: dbName, entityType } : dbName
 
     switch (syncMode) {
       case 'user':
+        if (userRegistry.has(dbName)) return
         userRegistry.set(dbName, entry)
+        // 如果 user 引擎已运行，动态加入
+        if (userEngine) {
+          ensureAllTables('global', [dbName]).then(() => userEngine.addTable(tableConfig))
+        }
         break
       case 'company':
+        if (companyRegistry.has(dbName)) return
         companyRegistry.set(dbName, entry)
+        if (companyEngine) {
+          ensureAllTables('global', [dbName]).then(() => companyEngine.addTable(tableConfig))
+        }
         break
       case 'project':
+        if (projectRegistry.has(dbName)) return
         projectRegistry.set(dbName, entry)
+        if (projectEngine && activeProjectId) {
+          ensureAllTables(activeProjectId, [dbName]).then(() => projectEngine.addTable(tableConfig))
+        }
         break
       // 'local' 模式不注册同步
     }
@@ -187,10 +202,13 @@ export function createSyncManager(config) {
 
     activeProjectId = projectId
 
+    // 注意：即使 projectRegistry 为空也要创建引擎
+    // 因为业务代码的 schema 文件可能在 startProject 之后才通过 Nuxt auto-import 加载
+    // 新表被 register() 后，通过 addTable() 动态加入现有引擎
     const tableNames = [...projectRegistry.keys()]
-    if (!tableNames.length) return
-
-    await ensureAllTables(projectId, tableNames)
+    if (tableNames.length) {
+      await ensureAllTables(projectId, tableNames)
+    }
 
     projectEngine = createSyncEngine(buildEngineConfig('project'))
     projectEngine.onStateChange((state) => notifyStateChange(projectRegistry, state))

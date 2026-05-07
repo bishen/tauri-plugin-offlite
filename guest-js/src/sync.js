@@ -885,6 +885,31 @@ export function createSyncEngine(config) {
     console.info('[Sync] 已重置所有 checkpoint，下次 pull 将全量拉取')
   }
 
+  /**
+   * 动态添加表到运行中的同步引擎
+   * @param {string|{name: string, entityType?: string}} tableConfig
+   */
+  function addTable(tableConfig) {
+    let name, entityType
+    if (typeof tableConfig === 'string') {
+      name = tableConfig
+    } else if (tableConfig?.name) {
+      name = tableConfig.name
+      entityType = tableConfig.entityType
+    } else {
+      return
+    }
+    if (tables.includes(name)) return
+    tables.push(name)
+    if (entityType) tableEntityTypes[name] = entityType
+    // 如果同步已激活且在线，立即拉取该表
+    if (!stopped && state.mode !== 'offline') {
+      pullTable(name).catch(err => {
+        console.warn(`[Sync] addTable pull ${name} 失败:`, err?.message)
+      })
+    }
+  }
+
   return {
     start,
     stop,
@@ -893,6 +918,7 @@ export function createSyncEngine(config) {
     hasUnsyncedChanges,
     updateToken,
     resetCheckpoints,
+    addTable,
     getState: () => ({ ...state }),
     onStateChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
     sendMessage,
