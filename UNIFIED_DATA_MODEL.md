@@ -8,7 +8,7 @@
 - 标准字段使用独立 PostgreSQL 列（可索引、可聚合）
 - App 差异化字段存入 `ext` JSONB 列
 - 客户端本地 SQLite 存储不变（仍用 `data` TEXT 列）
-- 字段名转换由服务端自动处理（客户端 camelCase ↔ 服务端 snake_case）
+- 全栈统一 snake_case 字段名，无需转换
 
 ## 标准实体类型
 
@@ -38,7 +38,7 @@ export const useProjectDB = defineSyncModel('project', {
 
 // 非标准实体 — 不声明 entityType，走 offlite 旧路径
 export const usePhotoDB = defineSyncModel('photos', {
-  p_id: { type: 'string', required: true },
+  project_id: { type: 'string', required: true },
   url: { type: 'string' },
   // ...
 })
@@ -46,49 +46,52 @@ export const usePhotoDB = defineSyncModel('photos', {
 
 **未声明 `entityType` 时默认为 `'other'`**，数据继续写入 offlite schema 的动态表。
 
+> **字段命名**：所有字段名使用 snake_case，与服务端 PostgreSQL 列名一致。
+> 详见 [NAMING_CONVENTION.md](./NAMING_CONVENTION.md)。
+
 ## 各实体标准列定义
 
 ### Project（项目）
 
-| 客户端字段 (camelCase) | 服务端列 (snake_case) | 类型 | required | 默认值 | 说明 |
+| 字段名 (snake_case) | 服务端列 | 类型 | required | 默认值 | 说明 |
 |---|---|---|---|---|---|
 | name | name | TEXT | ✅ | - | 项目名称 |
 | area | area | DOUBLE PRECISION | | 0 | 面积（平米） |
 | status | status | INTEGER | ✅ | 0 | 项目状态 |
-| projectType | project_type | TEXT | | 'forest' | 项目类型 |
+| project_type | project_type | TEXT | | 'forest' | 项目类型 |
 | unit | unit | TEXT | | 'hm' | 面积单位 |
-| managerId | manager_id | INTEGER | ✅ | 0 | 项目负责人 uid |
-| chiefEngineerId | chief_engineer_id | INTEGER | | 0 | 总工程师 uid |
-| techLeaderId | tech_leader_id | INTEGER | | 0 | 技术负责人 uid |
-| invstIds | invst_ids | INTEGER[] | | [] | 调查人员 uid 数组 |
-| start | start_date | TIMESTAMPTZ | | null | 开始时间 |
-| end | end_date | TIMESTAMPTZ | | null | 结束时间 |
-| center[0] | center_lng | DOUBLE PRECISION | | null | 中心经度 |
-| center[1] | center_lat | DOUBLE PRECISION | | null | 中心纬度 |
-| location.province | province | TEXT | | null | 省 |
-| location.city | city | TEXT | | null | 市 |
-| location.county | county | TEXT | | null | 县 |
+| manager_id | manager_id | INTEGER | ✅ | 0 | 项目负责人 uid |
+| chief_engineer_id | chief_engineer_id | INTEGER | | 0 | 总工程师 uid |
+| tech_leader_id | tech_leader_id | INTEGER | | 0 | 技术负责人 uid |
+| invst_ids | invst_ids | INTEGER[] | | [] | 调查人员 uid 数组 |
+| start_date | start_date | TIMESTAMPTZ | | null | 开始时间 |
+| end_date | end_date | TIMESTAMPTZ | | null | 结束时间 |
+| center_lng | center_lng | DOUBLE PRECISION | | null | 中心经度 |
+| center_lat | center_lat | DOUBLE PRECISION | | null | 中心纬度 |
+| province | province | TEXT | | null | 省 |
+| city | city | TEXT | | null | 市 |
+| county | county | TEXT | | null | 县 |
 | boundary | boundary | GEOMETRY | | null | 项目边界（PostGIS） |
-| coordSys | coord_sys | INTEGER | | 4490 | 坐标系 EPSG |
+| coord_sys | coord_sys | INTEGER | | 4490 | 坐标系 EPSG |
 | surveys | surveys | TEXT[] | | ['乔木'] | 调查内容 |
-| dbhType | dbh_type | INTEGER | | 0 | 胸径类型 |
-| dbhValue | dbh_value | INTEGER | | 2 | 径阶步长 |
-| heightType | height_type | INTEGER | | 0 | 树高类型 |
-| heightValue | height_value | INTEGER | | 1 | 高阶值 |
-| heightExcel | height_excel | TEXT | | '' | 高阶公式 |
-| rootType | root_type | INTEGER | | 0 | 地径类型 |
-| rootValue | root_value | INTEGER | | 2 | 径阶值 |
+| dbh_type | dbh_type | INTEGER | | 0 | 胸径类型 |
+| dbh_value | dbh_value | INTEGER | | 2 | 径阶步长 |
+| height_type | height_type | INTEGER | | 0 | 树高类型 |
+| height_value | height_value | INTEGER | | 1 | 高阶值 |
+| height_excel | height_excel | TEXT | | '' | 高阶公式 |
+| root_type | root_type | INTEGER | | 0 | 地径类型 |
+| root_value | root_value | INTEGER | | 2 | 径阶值 |
 | watermark | watermark | TEXT[] | | ['项目名称','坐标','日期','调查员'] | 水印配置 |
-| forestEdge | forest_edge | DOUBLE PRECISION | | 0 | 林缘距离(m) |
-| surveyAreaThreshold | survey_area_threshold | DOUBLE PRECISION | | 1 | 全小班调查阈值(亩) |
-| syncEnabled | sync_enabled | BOOLEAN | | true | 同步开关 |
+| forest_edge | forest_edge | DOUBLE PRECISION | | 0 | 林缘距离(m) |
+| survey_area_threshold | survey_area_threshold | DOUBLE PRECISION | | 1 | 全小班调查阈值(亩) |
+| sync_enabled | sync_enabled | BOOLEAN | | true | 同步开关 |
 | factors | → ext.factors | JSONB (ext) | | [] | 调查因子（存入 ext） |
 
 ### SubCompartment（小班）
 
-| 客户端字段 | 服务端列 | 类型 | required | 默认值 | 说明 |
+| 字段名 | 服务端列 | 类型 | required | 默认值 | 说明 |
 |---|---|---|---|---|---|
-| p_id | p_id | TEXT | ✅ | - | 所属项目 ID |
+| project_id | project_id | TEXT | ✅ | - | 所属项目 ID |
 | linban | linban | TEXT | | null | 林班号 |
 | feature_id | feature_id | INTEGER | ✅ | - | 小班唯一标识 |
 | sort | sort | INTEGER | | 0 | 小班序号 |
@@ -99,35 +102,52 @@ export const usePhotoDB = defineSyncModel('photos', {
 
 ### SamplePlot（样地）
 
-| 客户端字段 | 服务端列 | 类型 | required | 默认值 | 说明 |
+| 字段名 | 服务端列 | 类型 | required | 默认值 | 说明 |
 |---|---|---|---|---|---|
-| p_id | p_id | TEXT | ✅ | - | 所属项目 ID |
+| project_id | project_id | TEXT | ✅ | - | 所属项目 ID |
 | class_id | class_id | TEXT | ✅ | - | 所属小班 ID |
 | seq | seq | INTEGER | | 1 | 样地编号 |
-| type | plot_type | TEXT | | 'rect' | 样地类型 |
+| plot_type | plot_type | TEXT | | 'rect' | 样地类型 |
 | width | width | DOUBLE PRECISION | | 20 | 宽度(m) |
 | height | height | DOUBLE PRECISION | | 20 | 高度(m) |
 | radius | radius | DOUBLE PRECISION | | 12 | 半径(m) |
 | rotation | rotation | DOUBLE PRECISION | | 0 | 旋转角度 |
 | area | area | DOUBLE PRECISION | | 0 | 面积(m²) |
-| center[0] | center_lng | DOUBLE PRECISION | | null | 中心经度 |
-| center[1] | center_lat | DOUBLE PRECISION | | null | 中心纬度 |
+| center_lng | center_lng | DOUBLE PRECISION | | null | 中心经度 |
+| center_lat | center_lat | DOUBLE PRECISION | | null | 中心纬度 |
 | elevation | elevation | DOUBLE PRECISION | | 0 | 海拔(m) |
-| features | geom | GEOMETRY | | null | 样地边界（PostGIS） |
+| geom | geom | GEOMETRY | | null | 样地边界（PostGIS） |
 | *(碳汇概况、统计字段等 30+ 列详见设计文档)* |
 
 ### Survey（调查数据）
 
 所有 9 种调查类型共享一张 `sync.surveys` 表，通过 `survey_type` 和 `collection_name` 区分。
 
+**9 种调查类型：**
+
+| collection_name | 说明 | 对应 schema 文件 |
+|-----------------|------|-----------------|
+| `dbh_actual` | 每木检尺（实际胸径/散生木/幼树） | dbhActual.js |
+| `dbh_step` | 径阶调查 | dbhStep.js |
+| `bamboo_survey` | 竹类调查 | bambooSurvey.js |
+| `shrub_survey` | 灌木调查 | shrubSurvey.js |
+| `herb_survey` | 草本调查 | herbSurvey.js |
+| `soil_survey` | 土壤调查 | soilSurvey.js |
+| `litter_survey` | 枯落物调查 | litterSurvey.js |
+| `fallen_wood_survey` | 枯倒木调查 | fallenWoodSurvey.js |
+| `baseline_survey` | 碳汇基线调查 | baselineSurvey.js |
+
 **通用 required 列：**
-| 客户端字段 | 服务端列 | required |
+| 字段名 | 服务端列 | required |
 |---|---|---|
-| p_id | p_id | ✅ |
-| surveyType | survey_type | ✅ |
+| project_id | project_id | ✅ |
+| survey_type | survey_type | ✅ |
 | *(collection_name 由服务端自动填入)* | collection_name | ✅ |
 
 **同名字段映射规则（避免冲突）：**
+
+由于 9 种调查类型共享一张表，部分通用字段名在不同调查类型中含义不同，需要映射到唯一列名：
+
 | 客户端字段 | 调查类型 | 服务端列 |
 |---|---|---|
 | height | dbh_actual | tree_height |
@@ -140,20 +160,31 @@ export const usePhotoDB = defineSyncModel('photos', {
 | volume | dbh_actual/dbh_step | tree_volume |
 | status | dbh_actual/dbh_step | tree_status |
 | species | fallen_wood_survey | fallen_species |
-| carbonStorage | litter_survey | litter_carbon |
+| carbon_storage | litter_survey | litter_carbon |
 | color | soil_survey | soil_color |
 | layers | soil_survey | soil_layers |
 
+> 注意：Survey 的同名字段映射由服务端 `surveyFieldMap.ts` 自动处理，客户端直接使用原始字段名（如 `height`、`count`）即可。
+
 ### Output（成果产品）
 
-| 客户端字段 | 服务端列 | 类型 | required | 说明 |
+成果产品表存储项目的输出物（报告、图件等）。
+
+**产品类型（output_type 枚举）：**
+
+| output_type | 说明 |
+|-------------|------|
+| `report` | 调查报告书（HTML 富文本 + DOCX 导出） |
+| *(未来扩展)* | 图件、数据表、汇总表等 |
+
+| 字段名 | 服务端列 | 类型 | required | 说明 |
 |---|---|---|---|---|
-| p_id | p_id | TEXT | ✅ | 所属项目 ID |
-| outputType | output_type | TEXT | ✅ | 产品类型 |
+| project_id | project_id | TEXT | ✅ | 所属项目 ID |
+| output_type | output_type | TEXT | ✅ | 产品类型（见上表） |
 | name | name | TEXT | ✅ | 名称 |
-| fileRef | file_ref | TEXT | | 文件引用 |
+| file_ref | file_ref | TEXT | | 文件引用（OSS 地址） |
 | sections | → ext.sections | JSONB (ext) | | 章节数组（存入 ext） |
-| docxStyle | → ext.docxStyle | JSONB (ext) | | 排版配置（存入 ext） |
+| docx_style | → ext.docx_style | JSONB (ext) | | 排版配置（存入 ext） |
 
 ## ext 扩展字段使用说明
 
@@ -164,21 +195,22 @@ export const usePhotoDB = defineSyncModel('photos', {
 2. ext 默认为空对象 `{}`
 3. 客户端 push 时，不在标准列集合中的字段自动归入 ext
 4. 客户端 pull 时，ext 中的字段自动合并到扁平数据中返回
+5. ext 键名同样使用 snake_case
 
 **示例（survey App 的 project）：**
 ```javascript
-// 客户端 push 的数据
+// 客户端 push 的数据（全 snake_case）
 {
-  name: '项目A',        // → 标准列 name
-  area: 1000,           // → 标准列 area
-  managerId: 302,       // → 标准列 manager_id
-  factors: [{...}],     // → ext.factors（不在标准列中）
-  customField: 'xxx',   // → ext.customField（不在标准列中）
+  name: '项目A',            // → 标准列 name
+  area: 1000,               // → 标准列 area
+  manager_id: 302,          // → 标准列 manager_id
+  factors: [{...}],         // → ext.factors（不在标准列中）
+  custom_field: 'xxx',      // → ext.custom_field（不在标准列中）
 }
 
 // 服务端存储
 // sync.projects 表：name='项目A', area=1000, manager_id=302
-// ext = {"factors": [{...}], "customField": "xxx"}
+// ext = {"factors": [{...}], "custom_field": "xxx"}
 ```
 
 ## 新 App 接入指南
@@ -199,24 +231,28 @@ export const usePhotoDB = defineSyncModel('photos', {
 ### 2. 定义 schema 并声明 entityType
 
 ```javascript
-// 你的 App 的项目模型
+// 你的 App 的项目模型（全部使用 snake_case 字段名）
 export const useProjectDB = defineSyncModel('project', {
   // 标准字段（会写入独立列）
   name: { type: 'string', required: true },
   area: { type: 'number', default: 0 },
   status: { type: 'number', default: 0 },
-  managerId: { type: 'number', required: true },
+  manager_id: { type: 'number', required: true },
+  chief_engineer_id: { type: 'number', default: 0 },
+  tech_leader_id: { type: 'number', default: 0 },
+  invst_ids: { type: 'array', default: [] },
+  project_type: { type: 'string', default: 'forest' },
   // ...其他标准字段
 
   // 你的 App 特有字段（会自动存入 ext）
-  myCustomField: { type: 'string', default: '' },
-  myConfig: { type: 'object', default: {} },
+  my_custom_field: { type: 'string', default: '' },
+  my_config: { type: 'object', default: {} },
 }, { syncMode: 'user', entityType: 'project' })
 ```
 
 ### 3. 标准字段命名
 
-客户端使用 camelCase，服务端自动转为 snake_case。确保你的标准字段名与本文档中的定义一致。
+全栈统一 snake_case，客户端字段名与服务端 PostgreSQL 列名完全一致。无需任何转换。
 
 ### 4. 非标准实体
 
@@ -224,19 +260,24 @@ export const useProjectDB = defineSyncModel('project', {
 
 ```javascript
 export const usePhotoDB = defineSyncModel('photos', {
-  p_id: { type: 'string', required: true },
+  project_id: { type: 'string', required: true },
   url: { type: 'string' },
 })
 ```
 
-## 字段名转换规则
+## 字段名规范
 
-| 方向 | 转换 | 示例 |
+**全栈统一 snake_case**：客户端 data JSON 键名、服务端 PostgreSQL 列名、API 传输字段名全部使用 snake_case。
+
+详见 [NAMING_CONVENTION.md](./NAMING_CONVENTION.md)。
+
+| 层级 | 风格 | 示例 |
 |------|------|------|
-| push（客户端→服务端） | camelCase → snake_case | `managerId` → `manager_id` |
-| pull（服务端→客户端） | snake_case → camelCase | `manager_id` → `managerId` |
+| 客户端 SQLite data JSON | snake_case | `manager_id`, `chief_engineer_id` |
+| API push/pull body | snake_case | `manager_id`, `chief_engineer_id` |
+| 服务端 PostgreSQL 列 | snake_case | `manager_id`, `chief_engineer_id` |
 
-**特殊映射（surveys 表）：** 部分同名字段有特殊映射，详见上方"同名字段映射规则"表。
+**不再需要 camelCase ↔ snake_case 转换**。客户端直接使用 snake_case 字段名。
 
 ## 向后兼容
 

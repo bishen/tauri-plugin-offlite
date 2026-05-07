@@ -13,7 +13,7 @@
  * const childSync = createChildSync({
  *   childDB: usePlanningFeatureDB,
  *   parentDB: usePlanningDB,
- *   filterField: 'p_id',
+ *   filterField: 'project_id',
  *   countField: 'featureCount',
  *   checksumField: 'checksum',
  *   childIdField: 'feature_id',
@@ -45,7 +45,7 @@ async function sha256(text) {
  * @param {Object} config
  * @param {Object} config.childDB - 子表的 DB 实例（useDB/defineSyncModel 返回的对象）
  * @param {Object} config.parentDB - 父表的 DB 实例
- * @param {string} config.filterField - 子表中关联父表的字段名（如 'p_id'）
+ * @param {string} config.filterField - 子表中关联父表的字段名（如 'project_id'）
  * @param {string} config.countField - 父表中存储子记录数量的字段名（如 'featureCount'）
  * @param {string} config.checksumField - 父表中存储校验和的字段名（如 'checksum'）
  * @param {string} config.childIdField - 子记录的业务 ID 字段名（如 'feature_id'）

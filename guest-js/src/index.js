@@ -70,8 +70,9 @@ export async function dbDelete(projectId) {
 
 /**
  * Create business tables from schema definitions.
- * Each schema creates a table with fixed metadata columns, standard indexes,
- * the shared _change_log table, and any extra json_extract indexes.
+ * Each schema creates a table with fixed metadata columns (including _status),
+ * standard indexes, optional json_extract indexes, and the legacy _change_log
+ * table (retained for backward compatibility, not used by JS sync engine).
  *
  * @param {string} projectId
  * @param {Array<{name: string, json_indexes?: Array<{name: string, json_path: string}>}>} schemas
@@ -112,3 +113,8 @@ export async function syncStatus(projectId) {
 // ==================== Sync Engine (JS SDK) ====================
 
 export { createSyncEngine } from './sync.js'
+export { createChildSync } from './childSync.js'
+export { generateId } from './idgen.js'
+export { createDB } from './db.js'
+export { defineSchema, validateDoc, validateField, splitDoc, parseRow, META_FIELDS } from './schema.js'
+export { createSyncManager } from './syncManager.js'

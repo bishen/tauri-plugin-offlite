@@ -6,8 +6,8 @@
 |------|-------------|------|-----------|-------------------|-------------|
 | 同步触发 | 手动 `synchronize()` | 自动（RxJS） | 自动（后台流） | 自动（WebSocket） | **手动 + 自动混合** |
 | 推送方式 | 批量 push（整库变更集） | 逐文档 push + checkpoint | 写入即推（CRUD proxy） | 直接写服务端 | **write-through + 批量兜底** |
-| 拉取方式 | 批量 pull（since timestamp） | pull handler + stream | SSE/WebSocket 流 | WebSocket CDC | **SSE 实时 + pull-then-push 兜底** |
-| 变更追踪 | `_status` 列 | RxDB 内部 checkpoint | 服务端 oplog | PostgreSQL WAL | **`_status` 列（学习 WatermelonDB）** |
+| 拉取方式 | 批量 pull（since timestamp） | pull handler + stream | SSE/WebSocket 流 | WebSocket CDC | **WebSocket 通知触发 pull + pull-then-push 兜底** |
+| 变更追踪 | `_status` 列 | RxDB 内部 checkpoint | 服务端 oplog | PostgreSQL WAL | **`_status` 列（学习 WatermelonDB）+ Rust 侧保留 `_change_log` 表** |
 | 冲突解决 | 服务端决定 | 自定义 handler | 服务端 LWW | 服务端 LWW | **服务端 LWW + 自动回写本地** |
 | 离线支持 | ✅ 本地写 → 上线 push | ✅ 本地写 → 上线 push | ✅ 本地写 → 上线 push | ❌ 无离线 | **✅ 本地优先，_status 保留** |
 | 数据完整性 | pull-then-push 顺序 | checkpoint 保证 | oplog 序列号 | WAL 序列号 | **pull-then-push + 不覆盖未推送** |
@@ -16,7 +16,7 @@
 | 平台 | React Native | 浏览器 / Node | React Native / Flutter / Web | Web | **Tauri（桌面 + Android）** |
 | 服务端要求 | 自建 REST API | 自建 / CouchDB / Supabase | PowerSync Cloud / 自建 | Supabase Cloud | **自建 Fastify + PostgreSQL** |
 | 多应用隔离 | ❌ 单应用 | ❌ 单应用 | ✅ Bucket 机制 | ❌ 单项目 | **✅ appName 前缀动态建表** |
-| 每次写 IPC 开销 | 1 次（_status 列） | 1 次 | 0 次（proxy） | 0 次（直连） | **1 次（_status 列，无 changelog）** |
+| 每次写 IPC 开销 | 1 次（_status 列） | 1 次 | 0 次（proxy） | 0 次（直连） | **1 次（_status 列，JS 不写 changelog）** |
 
 ## 核心洞察
 
@@ -49,14 +49,17 @@
 
 ### 1. 变更追踪：内置 `_status` 列（学习 WatermelonDB）
 
-**去掉 `_change_log` 表**，改为在每个业务表中增加 `_status` 列：
+**JS 同步引擎不再使用 `_change_log` 表**，改为在每个业务表中依赖 `_status` 列：
 
 ```sql
 _status TEXT DEFAULT 'synced'  -- 'synced' | 'created' | 'updated' | 'deleted'
 ```
 
+> **注意**：Rust 侧 `schema.rs` 仍会创建 `_change_log` 表（向后兼容），`changelog.rs` 模块保留完整的
+> CRUD 函数。但 JS SDK 的同步引擎（`sync.js`）仅通过 `_status` 列追踪变更，不写入 `_change_log`。
+
 优势：
-- 减少一半的写操作（不需要额外写 changelog）
+- JS 侧每次写操作只需 1 次 IPC（不需要额外写 changelog）
 - 查询未同步变更直接 `WHERE _status != 'synced'`，无需 JOIN
 - 与 WatermelonDB 一致，经过大规模验证
 
@@ -76,22 +79,39 @@ synchronize() {
 }
 ```
 
-### 3. 实时通道：SSE stream（学习 RxDB）
+### 3. 实时通道：WebSocket 通知（替代 SSE）
 
-在 pull-then-push 基础上，增加 SSE 实时流：
+在 pull-then-push 基础上，增加 WebSocket 实时通知：
 
 ```
 启动同步:
   1. 执行一次完整的 synchronize()（pull + push）
-  2. 建立 SSE 连接，接收实时变更
-  3. SSE 收到变更 → 直接应用到本地
+  2. 建立 WebSocket 连接，通过 JSON 消息认证（{ type: 'auth', token }）
+  3. WebSocket 收到二进制通知（MessagePack）→ 防抖 200ms → pull 对应表
   4. 本地写操作 → 立即 push（write-through）
-  5. SSE 断开 → 降级为定时 synchronize()
+  5. WebSocket 断开 → 指数退避重连，3 次失败降级为定时 synchronize()
 ```
 
-### 4. Checkpoint：序列号 + 时间戳混合（学习 PowerSync + RxDB）
+> **为什么选择 WebSocket 而非 SSE**：
+> - Android WebView 对 EventSource 支持不稳定
+> - WebSocket 支持双向通信（可用于编辑锁等场景）
+> - 认证信息不暴露在 URL 中（通过连接后发送 auth 消息）
+
+### 4. Checkpoint：时间戳（当前）+ 序列号（预留）
+
+当前实现仅使用时间戳：
 
 ```javascript
+// 当前实现（_sync_checkpoint 表）
+checkpoint = {
+  last_sync_at: '2025-01-01T00:00:00Z',  // 服务端返回的最后一条变更时间戳
+}
+```
+
+未来如果服务端支持 oplog，可扩展为混合模式：
+
+```javascript
+// 未来扩展（预留）
 checkpoint = {
   last_pulled_at: '2025-01-01T00:00:00Z',  // 时间戳（兼容性好）
   last_op_id: 12345,                         // 序列号（精确性好）
@@ -111,17 +131,17 @@ checkpoint = {
 ## 新的表结构
 
 ```sql
--- 业务表（去掉 _change_log，增加 _status）
+-- 业务表（_status 列追踪变更，_change_log 表由 Rust 侧保留但 JS SDK 不使用）
 CREATE TABLE {table_name} (
     _id         TEXT PRIMARY KEY,
     uid         INTEGER,
-    companyId   INTEGER,
-    p_id        TEXT,
-    createdAt   TEXT NOT NULL,
-    updatedAt   TEXT NOT NULL,
+    company_id  INTEGER,
+    project_id  TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
     _deleted    INTEGER DEFAULT 0,
     _version    INTEGER DEFAULT 1,
-    _status     TEXT DEFAULT 'synced',  -- 新增：synced/created/updated/deleted
+    _status     TEXT DEFAULT 'synced',  -- synced/created/updated/deleted
     data        TEXT NOT NULL
 );
 CREATE INDEX idx_{table}_status ON {table}(_status);
@@ -136,9 +156,11 @@ const engine = createSyncEngine({
   baseUrl: 'https://api.example.com',
   token: 'jwt_token',
   appName: 'survey',
+  syncMode: 'project',
+  onTokenRefresh: async () => { /* 返回新 token */ },
 })
 
-// 启动同步（执行初始 sync + 建立 SSE + 定时 sync 兜底）
+// 启动同步（执行初始 sync + 建立 WebSocket + 定时 sync 兜底）
 engine.start('project_001', ['planning', 'sample', 'dbh_actual'])
 
 // 手动触发一次完整同步
@@ -150,17 +172,30 @@ const hasChanges = await engine.hasUnsyncedChanges()
 // 写入后即时推送（write-through）
 engine.pushChanges('planning')
 
+// 更新 token（401 自动刷新后也会内部调用）
+engine.updateToken('new_jwt_token')
+
+// 重置 checkpoint（强制下次全量拉取）
+await engine.resetCheckpoints()
+
+// 监听状态变更
+const unlisten = engine.onStateChange((state) => {
+  console.log(state.mode, state.docs_pushed, state.docs_pulled)
+})
+
 // 停止同步
 engine.stop()
 ```
 
 ## 性能优化
 
-1. **批量推送**：收集所有未同步记录一次性推送，不是逐条
-2. **去掉 changelog 表**：每次写操作从 2 次 IPC 减少到 1 次
-3. **SSE 增量**：实时变更通过 SSE 推送，不需要轮询
+1. **批量推送**：收集所有未同步记录一次性推送，不是逐条（每批最多 50 条）
+2. **`_status` 列替代 changelog 写入**：JS 侧每次写操作只需 1 次 IPC
+3. **WebSocket 增量通知**：实时变更通过 WebSocket 推送，收到通知后按需 pull
 4. **分表推送**：每个表独立推送，大表不阻塞小表
 5. **压缩传输**：MessagePack 编码，比 JSON 小 30-50%
+6. **防抖合并**：200ms 窗口内同一表的多个 WebSocket 通知合并为一次 pull
+7. **push 兜底定时器**：realtime 模式下每 60s 兜底推送未同步记录
 
 
 ## 应用层协同模式：小班区划多端实时协同

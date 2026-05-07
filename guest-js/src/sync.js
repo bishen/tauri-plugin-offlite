@@ -144,7 +144,7 @@ export function createSyncEngine(config) {
   async function getUnsyncedDocs(table) {
     return await invoke('plugin:offlite|db_query', {
       projectId: dbId,
-      sql: `SELECT _id, uid, companyId, p_id, createdAt, updatedAt, _deleted, _version, _status, data
+      sql: `SELECT _id, uid, company_id, project_id, created_at, updated_at, _deleted, _version, _status, data
             FROM ${table} WHERE _status != 'synced' LIMIT ${PUSH_BATCH_SIZE}`,
       params: [],
     }) || []
@@ -162,19 +162,10 @@ export function createSyncEngine(config) {
   }
 
   /**
-   * 标准化 pull 数据的 key：camelCase → snake_case
-   * 服务端标准实体 pull 路径会做 snakeToCamel 转换，客户端需要转回来
+   * 标准化 pull 数据的 key — 已废弃
+   * 全栈统一 snake_case 后不再需要转换，直接使用服务端返回的数据
    */
-  function normalizePulledKeys(data) {
-    if (!data || typeof data !== 'object') return data
-    const result = {}
-    for (const [key, value] of Object.entries(data)) {
-      // camelCase → snake_case
-      const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)
-      result[snakeKey] = value
-    }
-    return result
-  }
+  // function normalizePulledKeys(data) { ... } — 已移除
 
   /** 应用服务端拉取的变更到本地 */
   async function applyPulledChanges(table, changes) {
@@ -194,14 +185,13 @@ export function createSyncEngine(config) {
         // （如果本地有未推送的修改，服务端的删除优先 — 数据已被其他用户删除）
         await invoke('plugin:offlite|db_execute', {
           projectId: dbId,
-          sql: `UPDATE ${table} SET _deleted = 1, updatedAt = ?, _status = 'synced'
+          sql: `UPDATE ${table} SET _deleted = 1, updated_at = ?, _status = 'synced'
                 WHERE _id = ?`,
           params: [c.updatedAt, c.doc_id],
         })
       } else {
         let serverData = typeof c.data === 'string' ? JSON.parse(c.data) : (c.data || {})
-        // 标准化 key：服务端 pull 可能返回 camelCase，统一转为 snake_case 存储
-        serverData = normalizePulledKeys(serverData)
+        // 全栈统一 snake_case，直接使用服务端返回的数据，无需转换
         // 先检查本地是否有未推送的版本
         const local = await invoke('plugin:offlite|db_query', {
           projectId: dbId,
@@ -217,7 +207,7 @@ export function createSyncEngine(config) {
             const dataJson = JSON.stringify(serverData)
             await invoke('plugin:offlite|db_execute', {
               projectId: dbId,
-              sql: `UPDATE ${table} SET data = ?, updatedAt = ? WHERE _id = ?`,
+              sql: `UPDATE ${table} SET data = ?, updated_at = ? WHERE _id = ?`,
               params: [dataJson, c.updatedAt, c.doc_id],
             })
             state.docs_pulled++
@@ -231,12 +221,12 @@ export function createSyncEngine(config) {
         await invoke('plugin:offlite|db_execute', {
           projectId: dbId,
           sql: `INSERT OR REPLACE INTO ${table}
-                (_id, uid, companyId, p_id, createdAt, updatedAt, _deleted, _version, _status, data)
+                (_id, uid, company_id, project_id, created_at, updated_at, _deleted, _version, _status, data)
                 VALUES (?, ?, ?, ?, ?, ?, 0, 1, 'synced', ?)`,
           params: [
             c.doc_id,
             c.uid ?? null, c.company_id ?? null,
-            c.p_id ?? (c.data?.p_id) ?? null,
+            c.project_id ?? (c.data?.project_id) ?? null,
             c.createdAt || c.updatedAt, c.updatedAt,
             dataJson,
           ],
@@ -369,12 +359,12 @@ export function createSyncEngine(config) {
     const changes = docs.map(doc => {
       const status = doc._status
       if (status === 'deleted' || doc._deleted === 1) {
-        return { op: 'delete', doc_id: doc._id, updatedAt: doc.updatedAt }
+        return { op: 'delete', doc_id: doc._id, updatedAt: doc.updated_at }
       }
       let data = {}
       try { data = typeof doc.data === 'string' ? JSON.parse(doc.data) : (doc.data || {}) } catch (_) {}
-      data.p_id = doc.p_id
-      return { op: 'upsert', doc_id: doc._id, data, updatedAt: doc.updatedAt }
+      data.project_id = doc.project_id
+      return { op: 'upsert', doc_id: doc._id, data, updatedAt: doc.updated_at }
     })
 
     const entityType = tableEntityTypes[table] || undefined
@@ -401,7 +391,7 @@ export function createSyncEngine(config) {
         const dataJson = JSON.stringify(conflict.server_data)
         await invoke('plugin:offlite|db_execute', {
           projectId: dbId,
-          sql: `UPDATE ${table} SET data = ?, updatedAt = ?, _status = 'synced' WHERE _id = ?`,
+          sql: `UPDATE ${table} SET data = ?, updated_at = ?, _status = 'synced' WHERE _id = ?`,
           params: [dataJson, conflict.server_updated_at, conflict.doc_id],
         })
       }

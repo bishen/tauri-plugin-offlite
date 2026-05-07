@@ -33,10 +33,10 @@ pub fn create_table(conn: &Connection, schema: &TableSchema) -> Result<(), Strin
         "CREATE TABLE IF NOT EXISTS [{table}] (
             _id         TEXT PRIMARY KEY,
             uid         INTEGER,
-            companyId   INTEGER,
-            p_id        TEXT,
-            createdAt   TEXT NOT NULL,
-            updatedAt   TEXT NOT NULL,
+            company_id  INTEGER,
+            project_id  TEXT,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
             _deleted    INTEGER DEFAULT 0,
             _version    INTEGER DEFAULT 1,
             _status     TEXT DEFAULT 'synced',
@@ -50,9 +50,9 @@ pub fn create_table(conn: &Connection, schema: &TableSchema) -> Result<(), Strin
     // 2. Create standard indexes
     let standard_indexes = [
         ("uid", "uid"),
-        ("companyId", "companyId"),
-        ("p_id", "p_id"),
-        ("updatedAt", "updatedAt"),
+        ("company_id", "company_id"),
+        ("project_id", "project_id"),
+        ("updated_at", "updated_at"),
         ("deleted", "_deleted"),
         ("status", "_status"),
     ];
@@ -158,9 +158,9 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
         assert!(indexes.contains(&"idx_planning_uid".to_string()));
-        assert!(indexes.contains(&"idx_planning_companyId".to_string()));
-        assert!(indexes.contains(&"idx_planning_p_id".to_string()));
-        assert!(indexes.contains(&"idx_planning_updatedAt".to_string()));
+        assert!(indexes.contains(&"idx_planning_company_id".to_string()));
+        assert!(indexes.contains(&"idx_planning_project_id".to_string()));
+        assert!(indexes.contains(&"idx_planning_updated_at".to_string()));
         assert!(indexes.contains(&"idx_planning_deleted".to_string()));
     }
 
@@ -279,7 +279,7 @@ mod tests {
 
         // INSERT
         conn.execute(
-            "INSERT INTO planning (_id, uid, companyId, p_id, createdAt, updatedAt, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO planning (_id, uid, company_id, project_id, created_at, updated_at, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params!["doc_1", 1, 100, "p_001", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", r#"{"name":"test"}"#],
         ).unwrap();
 
@@ -291,7 +291,7 @@ mod tests {
 
         // UPDATE
         conn.execute(
-            "UPDATE planning SET data = ?1, updatedAt = ?2 WHERE _id = ?3",
+            "UPDATE planning SET data = ?1, updated_at = ?2 WHERE _id = ?3",
             rusqlite::params![r#"{"name":"updated"}"#, "2025-01-02T00:00:00Z", "doc_1"],
         ).unwrap();
 

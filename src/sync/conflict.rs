@@ -209,6 +209,7 @@ pub fn log_conflicts(
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use serde_json::Value;
 
     /// Create an in-memory database with a business table for testing.
     fn setup_project_db() -> Connection {
@@ -218,7 +219,7 @@ mod tests {
                 _id         TEXT PRIMARY KEY,
                 uid         INTEGER,
                 companyId   INTEGER,
-                p_id        TEXT,
+                project_id  TEXT,
                 createdAt   TEXT NOT NULL DEFAULT '',
                 updatedAt   TEXT NOT NULL DEFAULT '',
                 _deleted    INTEGER DEFAULT 0,
