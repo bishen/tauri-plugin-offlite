@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-offlite"
-version = "0.1.0"
+version = "0.2.0"
 links = "tauri-plugin-offlite"
 description = "A Tauri plugin for offline-first SQLite storage with sync engine"
 authors = ["BiShen <bishen@live.com>"]

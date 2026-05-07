@@ -1,6 +1,6 @@
 {
   "name": "tauri-plugin-offlite-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "JavaScript bindings for tauri-plugin-offlite",
   "main": "src/index.js",
   "files": [
