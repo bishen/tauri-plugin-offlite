@@ -249,14 +249,15 @@ export function createSyncEngine(config) {
         const { emit: tauriEmit } = await import('@tauri-apps/api/event')
         const upsertedDocIds = changes.filter(c => !c.deleted).map(c => c.doc_id)
         const deletedDocIds = changes.filter(c => c.deleted).map(c => c.doc_id)
+        console.log(`[Sync] 触发 sync-data-changed: table=${table}, upsert=${upsertedDocIds.length}, delete=${deletedDocIds.length}`)
         await tauriEmit('sync-data-changed', {
           table,
           docIds: upsertedDocIds,
           deletedDocIds,
           action: 'pull',
         })
-      } catch (_) {
-        // 非 Tauri 环境忽略
+      } catch (e) {
+        console.error('[Sync] 触发 sync-data-changed 失败:', e?.message || e)
       }
     }
   }
