@@ -359,7 +359,7 @@ export function createSyncEngine(config) {
     const changes = docs.map(doc => {
       const status = doc._status
       if (status === 'deleted' || doc._deleted === 1) {
-        return { op: 'delete', doc_id: doc._id, updatedAt: doc.updated_at }
+        return { op: 'delete', doc_id: doc._id, updatedAt: doc.updated_at, data: { project_id: doc.project_id } }
       }
       let data = {}
       try { data = typeof doc.data === 'string' ? JSON.parse(doc.data) : (doc.data || {}) } catch (_) {}
@@ -568,7 +568,10 @@ export function createSyncEngine(config) {
 
           if (!notifyTable) return
           // 只处理当前正在同步的表
-          if (!tables.includes(notifyTable)) return
+          if (!tables.includes(notifyTable)) {
+            console.warn(`[Sync] WS 通知跳过: ${notifyTable} 不在 tables 列表中`, tables)
+            return
+          }
 
           // 防抖：合并 200ms 内同一表的多个通知
           if (pendingPulls.has(notifyTable)) {
