@@ -579,10 +579,12 @@ export function createSyncEngine(config) {
           }
           pendingPulls.set(notifyTable, setTimeout(async () => {
             pendingPulls.delete(notifyTable)
+            console.log(`[Sync] 防抖结束，开始 pull: ${notifyTable}`)
             try {
               let hasMore = true
               while (hasMore) {
                 const result = await pullTable(notifyTable)
+                console.log(`[Sync] pull ${notifyTable} 完成: pulled=${result.pulled}, hasMore=${result.hasMore}`)
                 hasMore = result.hasMore
               }
               emit()
